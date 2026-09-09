@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies (runtime + dev)
+        run: uv sync --python 3.12 --extra dev
+      - name: Compile-all sanity
+        run: uv run python -m compileall -q src
+      - name: Fast test suite
+        run: uv run pytest tests/ -m "not slow" -q --no-header --tb=short

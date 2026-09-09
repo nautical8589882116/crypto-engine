@@ -1,0 +1,53 @@
+[project]
+name = "quant-crypto-engine"
+version = "0.1.0"
+description = "Autonomous hybrid quantitative trading engine for spot crypto (BTC/ETH) via Binance"
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "openai>=1.40",
+    "anthropic>=0.34",
+    "mcp>=1.1",
+    "websockets>=13.0",
+    "httpx>=0.27",
+    "onnxruntime>=1.18",
+    "python-binance>=1.0.19",
+]
+
+[project.optional-dependencies]
+# Training/export only — kept out of the runtime image to stay lean.
+train = [
+    "torch>=2.3",
+    "onnx>=1.16",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "slow: long-running benchmarks (deselect with -m 'not slow')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Mission Control</title>
+  <meta name="quant-api-base" content="" />
+  <style>
+    :root {
+      --bg: #0b0f14; --panel: #141a22; --panel2: #0f141b;
+      --text: #e6edf3; --muted: #8b98a5; --line: #242e3a;
+      --green: #3fb950; --red: #f85149; --amber: #d29922; --cyan: #39c5cf;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+    header { display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: .5px; }
+    header h1 .accent { color: var(--cyan); }
+    #conn { color: var(--muted); font-size: 12px; }
+    #conn.ok { color: var(--green); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; padding: 20px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+    .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    .price { font-size: 28px; font-weight: 700; }
+    .price .unit { color: var(--muted); font-size: 15px; font-weight: 400; }
+    .row { display: flex; justify-content: space-between; padding: 3px 0; }
+    .row .k { color: var(--muted); }
+    .pos { color: var(--green); } .neg { color: var(--red); } .flat { color: var(--muted); }
+    .kv { display: flex; justify-content: space-between; font-size: 13px; margin: 4px 0; }
+    .big { font-size: 22px; font-weight: 700; }
+    #kill { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer;
+      font-size: 14px; font-weight: 700; color: #fff; background: var(--green); margin-top: 8px; }
+    #kill.tripped { background: var(--red); }
+    #feed { max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.5; }
+    #feed div { padding: 3px 0; border-bottom: 1px solid var(--line); }
+    .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin-right: 6px; }
+    .tag.guard { background: #3a2a00; color: var(--amber); }
+    .tag.entry { background: #002b18; color: var(--green); }
+    .tag.exit { background: #2b0800; color: var(--red); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 5px; font-size: 11px; }
+    .badge.live { background: #002b18; color: var(--green); }
+    .badge.paper { background: #1a2333; color: var(--cyan); }
+    .foot { color: var(--muted); font-size: 11px; padding: 10px 22px; border-top: 1px solid var(--line); }
+    .syms { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    .sym { flex: 1; min-width: 120px; background: var(--panel2); border: 1px solid var(--line);
+      border-radius: 8px; padding: 10px; }
+    .sym .n { color: var(--muted); font-size: 11px; }
+    .sym .v { font-size: 18px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><span class="accent">◆</span> CRYPTO MISSION CONTROL</h1>
+    <div><span class="badge paper" id="mode">PAPER</span> <span id="conn">connecting…</span></div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Market · BTC/ETH Spot</h2>
+      <div class="syms" id="syms"><div class="sym"><div class="n">…</div></div></div>
+      <div style="margin-top:12px" class="kv"><span class="k">Order-flow imbalance</span><span id="ofi" class="flat">—</span></div>
+      <div class="kv"><span class="k">Ticks seen</span><span id="ticks">0</span></div>
+      <div class="kv"><span class="k">Model probability</span><span id="prob" class="flat">—</span></div>
+      <div class="kv"><span class="k">Threshold</span><span id="thr">0.85</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Engine</h2>
+      <div class="kv"><span class="k">Mode</span><span id="mode2">paper</span></div>
+      <div class="kv"><span class="k">Trading</span><span id="trading" class="flat">false</span></div>
+      <div class="kv"><span class="k">Max daily loss</span><span id="loss">—</span></div>
+      <div class="kv"><span class="k">Max position (base)</span><span id="maxpos">—</span></div>
+      <div class="kv"><span class="k">Realized PnL</span><span id="pnl" class="flat">0.00</span></div>
+      <div class="kv"><span class="k">Open trades</span><span id="open">0</span></div>
+      <button id="kill">ARMED — click to kill</button>
+    </div>
+
+    <div class="card">
+      <h2>Feed / Events</h2>
+      <div id="feed">awaiting events…</div>
+    </div>
+
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="kv"><span class="k">Kill-switch</span><span id="ks">false</span></div>
+      <div class="kv"><span class="k">Flatten handler</span><span id="flatreg">false</span></div>
+      <div class="kv"><span class="k">Paper capital (USDT)</span><span id="funds">—</span></div>
+      <div style="margin-top:10px">
+        <button id="flatten" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;background:#7a2d2d;color:#fff;font-weight:700">FLATTEN ALL</button>
+        <button id="resume" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;background:#2d4a7a;color:#fff;font-weight:700;margin-top:8px">RESUME</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">Crypto Mission Control · live Binance feed · paper orders only unless LIVE_TRADING=1 · not financial advice</div>
+
+  <script>
+    const API = (document.querySelector('meta[name="quant-api-base"]').content || '').replace(/\/$/, '');
+    let latest = 0;
+    let tripped = false;
+    const syms = {};
+
+    async function j(url, opts) {
+      const r = await fetch(API + url, opts);
+      return r.json();
+    }
+
+    function setConn(ok, txt) {
+      const c = document.getElementById('conn');
+      c.textContent = txt;
+      c.className = ok ? 'ok' : '';
+    }
+
+    function fmt(n) {
+      if (n === null || n === undefined || isNaN(n)) return '—';
+      return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+    function signCls(n) { return n > 0 ? 'pos' : n < 0 ? 'neg' : 'flat'; }
+
+    function renderSyms(ms) {
+      const box = document.getElementById('syms');
+      box.innerHTML = '';
+      // fall back to showing combined market state
+      const data = ms || {};
+      if (data.ltp) {
+        const d = document.createElement('div'); d.className = 'sym';
+        d.innerHTML = `<div class="n">MARKET</div><div class="v">$${fmt(data.ltp)}</div>`;
+        box.appendChild(d);
+      }
+    }
+
+    async function tick() {
+      try {
+        const st = await j('/api/v1/status');
+        setConn(true, 'live · ' + new Date().toLocaleTimeString());
+        const ms = st.marketstate || {};
+        renderSyms(ms);
+
+        document.getElementById('mode2').textContent = st.mode;
+        document.getElementById('mode').textContent = (st.mode || 'paper').toUpperCase();
+        document.getElementById('mode').className = st.trading ? 'badge live' : 'badge paper';
+        document.getElementById('trading').textContent = String(st.trading);
+        document.getElementById('trading').className = st.trading ? 'pos' : 'flat';
+        document.getElementById('loss').textContent = '$' + fmt(st.engine?.max_daily_loss);
+        document.getElementById('maxpos').textContent = fmt(st.engine?.max_position);
+        document.getElementById('thr').textContent = fmt(st.engine?.prob_threshold);
+
+        if (ms.ltp !== undefined) {
+          const el = document.getElementById('prob');
+          el.textContent = fmt(ms.ltp);
+        }
+        const ofi = document.getElementById('ofi');
+        const imb = ms.taker_imbalance;
+        ofi.textContent = imb === null || imb === undefined ? '—' : (imb > 0 ? '+' : '') + (imb * 100).toFixed(1) + '%';
+        ofi.className = imb > 0 ? 'pos' : imb < 0 ? 'neg' : 'flat';
+        document.getElementById('ticks').textContent = fmt(ms.ticks_seen);
+
+        const pnl = st.telemetry?.total_pnl;
+        const pnlel = document.getElementById('pnl');
+        if (pnl !== undefined) { pnlel.textContent = (pnl > 0 ? '+' : '') + Number(pnl).toFixed(2); pnlel.className = signCls(pnl); }
+        document.getElementById('open').textContent = st.telemetry?.trades ?? 0;
+
+        tripped = st.killswitch;
+        const ks = document.getElementById('ks');
+        ks.textContent = String(tripped); ks.className = tripped ? 'neg' : 'pos';
+        const btn = document.getElementById('kill');
+        btn.textContent = tripped ? 'KILLED — trading halted' : 'ARMED — click to kill';
+        btn.className = tripped ? 'tripped' : '';
+        document.getElementById('flatreg').textContent = String(st.flatten_registered);
+
+        const f = await j('/api/v1/funds');
+        if (f.available !== undefined && f.available !== null) {
+          document.getElementById('funds').textContent = '$' + fmt(f.available) + ' (' + (f.source || '?') + ')';
+        }
+      } catch (e) {
+        setConn(false, 'offline / unreachable');
+      }
+
+      // feed events
+      try {
+        const fe = await j('/api/v1/feed?since=' + latest);
+        latest = fe.latest;
+        const box = document.getElementById('feed');
+        if (box.textContent === 'awaiting events…') box.innerHTML = '';
+        for (const ev of (fe.events || []).reverse()) {
+          const d = document.createElement('div');
+          const t = document.createElement('span');
+          t.className = 'tag ' + (ev.kind || 'guard');
+          t.textContent = (ev.kind || 'evt').toUpperCase();
+          d.appendChild(t);
+          d.appendChild(document.createTextNode(ev.txt || ''));
+          box.prepend(d);
+        }
+        while (box.children.length > 60) box.lastChild.remove();
+      } catch (e) { /* feed poll best-effort */ }
+    }
+
+    async function act(url, confirmMsg) {
+      if (confirmMsg && !confirm(confirmMsg)) return;
+      try { await j(url, { method: 'POST' }); } catch (e) { setConn(false, 'action failed'); }
+    }
+
+    document.getElementById('kill').addEventListener('click', () =>
+      act('/api/v1/kill', tripped ? '' : 'Trip the kill-switch? All new orders halt.'));
+    document.getElementById('flatten').addEventListener('click', () => act('/api/v1/flatten', 'Force-flatten all positions?'));
+    document.getElementById('resume').addEventListener('click', () => act('/api/v1/resume', 'Clear the kill-switch?'));
+
+    tick();
+    setInterval(tick, 2500);
+  </script>
+</body>
+</html>
