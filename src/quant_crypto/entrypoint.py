@@ -58,6 +58,53 @@ def set_flatten_handler(handler) -> None:
     _FLATTEN_HANDLER = handler
 
 
+def _marketstate_from_tape() -> dict:
+    """Read the latest ticks from the shared tape file written by the recorder
+    subprocess (cross-process, since the feed can't share the HTTP process)."""
+    rec = os.environ.get("RECORD_DIR", "/data/tapes")
+    latest = Path(rec) / "latest.jsonl"
+    rows = []
+    try:
+        if latest.is_file() and latest.stat().st_size > 0:
+            with latest.open() as fh:
+                lines = fh.readlines()[-200:]
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return {}
+    if not rows:
+        return {}
+    last = rows[-1]
+    # Aggregate per-symbol so bid/ask/ltp are coherent (don't mix BTC and ETH).
+    last_sym = last.get("symbol")
+    sym_rows = [r for r in rows if r.get("symbol") == last_sym]
+    if not sym_rows:
+        sym_rows = rows
+    bids = [r.get("bid", 0) for r in sym_rows if r.get("bid")]
+    asks = [r.get("ask", 0) for r in sym_rows if r.get("ask")]
+    buy_vol = sum(r.get("bid_qty", 0) for r in sym_rows)
+    sell_vol = sum(r.get("ask_qty", 0) for r in sym_rows)
+    total = buy_vol + sell_vol
+    ltp = last.get("ltp")
+    return {
+        "ltp": ltp,
+        "symbol": last_sym,
+        "bid": min(bids) if bids else None,
+        "ask": max(asks) if asks else None,
+        "spread": round(max(asks) - min(bids), 4) if bids and asks else None,
+        "taker_imbalance": round((buy_vol - sell_vol) / total, 4) if total > 0 else None,
+        "window": len(sym_rows),
+        "ticks_seen": len(sym_rows),
+        "healthy": True,
+    }
+
+
 class ControlHandler(BaseHTTPRequestHandler):
     def _send(self, code: int, payload: dict) -> None:
         body = json.dumps(payload).encode()
@@ -121,9 +168,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                 {"available": capital, "withdrawable": 0.0, "source": "paper", "client": "binance-paper"},
             )
         elif path == "/api/v1/marketstate":
-            from quant_crypto.engine.market_state import market_state_snapshot
-
-            self._send(200, market_state_snapshot() or {})
+            self._send(200, _marketstate_from_tape() or {})
         elif path == "/api/v1/feed":
             from urllib.parse import parse_qs
 
@@ -182,8 +227,11 @@ def main() -> None:
     port = int(os.environ.get("PORT", "8000"))
     from quant_crypto.config import get_settings
 
+    # The WebSocket feed + HTTP server cannot share a process: on Python 3.13,
+    # a second live thread starves the feed's asyncio event loop (0 ticks). So
+    # when AUTO_RECORD is set, the recorder runs as its OWN subprocess.
     if os.environ.get("AUTO_RECORD") == "1":
-        threading.Thread(target=_auto_record_thread, daemon=True, name="auto-record").start()
+        _spawn_recorder()
     log.info("starting crypto brain", extra={"extra_fields": {"port": port, "dashboard": str(_DASHBOARD)}})
     server = HTTPServer(("0.0.0.0", port), ControlHandler)
     try:
@@ -192,8 +240,32 @@ def main() -> None:
         server.shutdown()
 
 
+def _spawn_recorder() -> None:
+    """Launch the live tick recorder as a separate subprocess.
+
+    Uses the same module via `python -m quant_crypto.recorder_worker` so the
+    feed's event loop owns a whole process (no thread starvation).
+    """
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    cmd = [sys.executable, "-m", "quant_crypto.recorder_worker"]
+    try:
+        subprocess.Popen(cmd, env=env, start_new_session=True)
+        log.info("auto-recorder spawned as subprocess")
+    except Exception:  # noqa: BLE001
+        log.exception("failed to spawn recorder subprocess")
+
+
 def _auto_record_thread() -> None:
-    """Record live Binance ticks to /data/tapes during operation (hosted)."""
+    """Record live Binance ticks to /data/tapes during operation (hosted).
+
+    Runs in a daemon thread, so it MUST own a dedicated event loop: the parent
+    thread (the HTTP server) has no loop, and `asyncio.run()` here creates a
+    transient one that can fail to schedule the WebSocket. We create and set a
+    loop for this thread explicitly and run it until stop.
+    """
     import asyncio
 
     from quant_crypto.config import get_settings
@@ -226,10 +298,15 @@ def _auto_record_thread() -> None:
         finally:
             writer.close()
 
+    # Dedicated event loop owned by this thread.
+    _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
     try:
-        asyncio.run(loop())
+        _loop.run_until_complete(loop())
     except Exception:  # noqa: BLE001
         log.exception("auto-recorder stopped unexpectedly")
+    finally:
+        _loop.close()
 
 
 def time_str() -> str:

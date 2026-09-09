@@ -161,6 +161,16 @@ async def run_ingest(
     deliver_task = asyncio.create_task(deliver())
     if duration_s is not None:
         await asyncio.sleep(duration_s)
+    else:
+        # Indefinite mode: wait until the feed stops itself or is externally
+        # stopped (e.g. max_ticks reached / process shutdown). Do NOT set stop
+        # immediately — that would kill delivery before any tick is drained.
+        # Wait on the feed task; the deliver coroutine exits on its own when
+        # max_ticks is reached (deliver checks it) or the feed ends.
+        try:
+            await asyncio.wait_for(feed_task, timeout=None)
+        except asyncio.CancelledError:
+            pass
     stop.set()
     await deliver_task
 
