@@ -27,6 +27,31 @@ def _latest_path(out_dir: Path) -> Path:
     return out_dir / "latest.jsonl"
 
 
+def _make_feed(settings, symbols: list[str]):
+    """Build the market-data feed for the configured source.
+
+    Coinbase products use dashes (BTC-USD); Binance uses BTCUSDT. Map the
+    configured symbols to the source's convention so either works.
+    """
+    source = (getattr(settings, "market_data_source", "binance") or "binance").lower()
+    if source == "coinbase":
+        from quant_crypto.data.coinbase_feed import CoinbaseTickFeed
+
+        products = []
+        for s in symbols:
+            s = s.upper()
+            if "-" in s:
+                products.append(s)
+            elif s.endswith("USDT"):
+                products.append(s[:-4] + "-USD")
+            else:
+                products.append(s)
+        return CoinbaseTickFeed(products), products
+    from quant_crypto.data.binance_feed import BinanceTickFeed
+
+    return BinanceTickFeed(symbols), symbols
+
+
 def main() -> None:
     settings = get_settings()
     out_dir = Path(os.environ.get("RECORD_DIR", "/data/tapes"))
@@ -39,9 +64,11 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s recorder %(message)s")
     log = logging.getLogger("recorder_worker")
-    log.info("recorder worker start: %s -> %s", symbols, out)
-
-    feed = BinanceTickFeed(symbols)
+    feed, resolved = _make_feed(settings, symbols)
+    log.info(
+        "recorder worker start: source=%s %s -> %s",
+        getattr(settings, "market_data_source", "binance"), resolved, out,
+    )
     writer = TapeWriter(out, buffer_size=2000)
     latest = TapeWriter(_latest_path(out_dir), buffer_size=0)  # flush every tick
 

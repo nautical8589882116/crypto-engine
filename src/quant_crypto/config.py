@@ -56,6 +56,12 @@ class Settings(BaseSettings):
         description="Spot symbols the engine records/trades (base quote pairs). "
         "Accepts a JSON list or a comma-separated string (CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT).",
     )
+    market_data_source: str = Field(
+        default="binance",
+        description="Market-data feed: 'binance' (aggTrade+klines) or 'coinbase' "
+        "(ticker, real book). Use 'coinbase' where Binance returns HTTP 451 "
+        "(geo-blocked cloud regions).",
+    )
     quantities: dict[str, float] = Field(
         default_factory=lambda: dict(DEFAULT_QUANTITIES),
         description="Trade unit (base units) per symbol for a single entry.",
