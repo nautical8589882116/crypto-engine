@@ -92,17 +92,65 @@ def _marketstate_from_tape() -> dict:
     sell_vol = sum(r.get("ask_qty", 0) for r in sym_rows)
     total = buy_vol + sell_vol
     ltp = last.get("ltp")
+    first = sym_rows[0]
+    first_ltp = first.get("ltp") or ltp
+    price_delta = (ltp - first_ltp) if (ltp and first_ltp) else 0.0
+    first_oi = first.get("oi") or 0.0
+    last_oi = last.get("oi") or 0.0
+    volume_delta = last_oi - first_oi
+    bid = min(bids) if bids else None
+    ask = max(asks) if asks else None
+    spread = (ask - bid) if (bid is not None and ask is not None) else None
+    spread_bps = (spread / ltp * 10000.0) if (spread is not None and ltp) else None
     return {
         "ltp": ltp,
         "symbol": last_sym,
-        "bid": min(bids) if bids else None,
-        "ask": max(asks) if asks else None,
-        "spread": round(max(asks) - min(bids), 4) if bids and asks else None,
+        "bid": bid,
+        "ask": ask,
+        "spread": round(spread, 4) if spread is not None else None,
+        "spread_bps": round(spread_bps, 2) if spread_bps is not None else None,
         "taker_imbalance": round((buy_vol - sell_vol) / total, 4) if total > 0 else None,
+        "price_delta": round(price_delta, 6),
+        "price_delta_bps": round(price_delta / first_ltp * 10000.0, 2) if first_ltp else None,
+        "volume_delta": round(volume_delta, 4),
         "window": len(sym_rows),
         "ticks_seen": len(sym_rows),
         "healthy": True,
     }
+
+
+_EQUITY_HISTORY: list = []
+
+
+def _equity_snapshot() -> dict:
+    """Rolling PnL series for the equity curve (from engine telemetry)."""
+    import time as _t
+
+    from quant_crypto.engine.telemetry import engine_snapshot
+
+    snap = engine_snapshot() or {}
+    pnl = float(snap.get("total_pnl", 0.0) or 0.0)
+    if not _EQUITY_HISTORY or _EQUITY_HISTORY[-1]["pnl"] != pnl:
+        _EQUITY_HISTORY.append({"t": _t.time(), "pnl": pnl})
+        del _EQUITY_HISTORY[:-600]
+    return {
+        "points": _EQUITY_HISTORY,
+        "total_pnl": pnl,
+        "trades": snap.get("trades", 0),
+    }
+
+
+def _pipeline_steps() -> list:
+    """Pipeline display rows from real telemetry counters (or idle)."""
+    try:
+        from quant_crypto.engine.telemetry import build_pipeline_steps, engine_snapshot
+
+        snap = engine_snapshot()
+        if snap:
+            return build_pipeline_steps(snap)
+    except Exception:  # noqa: BLE001
+        pass
+    return []
 
 
 class ControlHandler(BaseHTTPRequestHandler):
@@ -169,6 +217,10 @@ class ControlHandler(BaseHTTPRequestHandler):
             )
         elif path == "/api/v1/marketstate":
             self._send(200, _marketstate_from_tape() or {})
+        elif path == "/api/v1/equity":
+            self._send(200, _equity_snapshot())
+        elif path == "/api/v1/pipeline":
+            self._send(200, {"steps": _pipeline_steps()})
         elif path == "/api/v1/feed":
             from urllib.parse import parse_qs
 

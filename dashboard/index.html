@@ -3,212 +3,471 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Crypto Mission Control</title>
   <meta name="quant-api-base" content="" />
-  <style>
-    :root {
-      --bg: #0b0f14; --panel: #141a22; --panel2: #0f141b;
-      --text: #e6edf3; --muted: #8b98a5; --line: #242e3a;
-      --green: #3fb950; --red: #f85149; --amber: #d29922; --cyan: #39c5cf;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text);
-      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
-    header { display: flex; align-items: center; justify-content: space-between;
-      padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel2); }
-    header h1 { font-size: 16px; margin: 0; letter-spacing: .5px; }
-    header h1 .accent { color: var(--cyan); }
-    #conn { color: var(--muted); font-size: 12px; }
-    #conn.ok { color: var(--green); }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; padding: 20px; }
-    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
-    .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
-    .price { font-size: 28px; font-weight: 700; }
-    .price .unit { color: var(--muted); font-size: 15px; font-weight: 400; }
-    .row { display: flex; justify-content: space-between; padding: 3px 0; }
-    .row .k { color: var(--muted); }
-    .pos { color: var(--green); } .neg { color: var(--red); } .flat { color: var(--muted); }
-    .kv { display: flex; justify-content: space-between; font-size: 13px; margin: 4px 0; }
-    .big { font-size: 22px; font-weight: 700; }
-    #kill { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer;
-      font-size: 14px; font-weight: 700; color: #fff; background: var(--green); margin-top: 8px; }
-    #kill.tripped { background: var(--red); }
-    #feed { max-height: 280px; overflow-y: auto; font-size: 12px; line-height: 1.5; }
-    #feed div { padding: 3px 0; border-bottom: 1px solid var(--line); }
-    .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin-right: 6px; }
-    .tag.guard { background: #3a2a00; color: var(--amber); }
-    .tag.entry { background: #002b18; color: var(--green); }
-    .tag.exit { background: #2b0800; color: var(--red); }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 5px; font-size: 11px; }
-    .badge.live { background: #002b18; color: var(--green); }
-    .badge.paper { background: #1a2333; color: var(--cyan); }
-    .foot { color: var(--muted); font-size: 11px; padding: 10px 22px; border-top: 1px solid var(--line); }
-    .syms { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-    .sym { flex: 1; min-width: 120px; background: var(--panel2); border: 1px solid var(--line);
-      border-radius: 8px; padding: 10px; }
-    .sym .n { color: var(--muted); font-size: 11px; }
-    .sym .v { font-size: 18px; font-weight: 700; }
-  </style>
-</head>
-<body>
-  <header>
-    <h1><span class="accent">◆</span> CRYPTO MISSION CONTROL</h1>
-    <div><span class="badge paper" id="mode">PAPER</span> <span id="conn">connecting…</span></div>
-  </header>
+  <title>Crypto Mission Control — Autonomous Quant Agent</title>
 
-  <div class="grid">
-    <div class="card">
-      <h2>Market · BTC/ETH Spot</h2>
-      <div class="syms" id="syms"><div class="sym"><div class="n">…</div></div></div>
-      <div style="margin-top:12px" class="kv"><span class="k">Order-flow imbalance</span><span id="ofi" class="flat">—</span></div>
-      <div class="kv"><span class="k">Ticks seen</span><span id="ticks">0</span></div>
-      <div class="kv"><span class="k">Model probability</span><span id="prob" class="flat">—</span></div>
-      <div class="kv"><span class="k">Threshold</span><span id="thr">0.85</span></div>
-    </div>
-
-    <div class="card">
-      <h2>Engine</h2>
-      <div class="kv"><span class="k">Mode</span><span id="mode2">paper</span></div>
-      <div class="kv"><span class="k">Trading</span><span id="trading" class="flat">false</span></div>
-      <div class="kv"><span class="k">Max daily loss</span><span id="loss">—</span></div>
-      <div class="kv"><span class="k">Max position (base)</span><span id="maxpos">—</span></div>
-      <div class="kv"><span class="k">Realized PnL</span><span id="pnl" class="flat">0.00</span></div>
-      <div class="kv"><span class="k">Open trades</span><span id="open">0</span></div>
-      <button id="kill">ARMED — click to kill</button>
-    </div>
-
-    <div class="card">
-      <h2>Feed / Events</h2>
-      <div id="feed">awaiting events…</div>
-    </div>
-
-    <div class="card">
-      <h2>Controls</h2>
-      <div class="kv"><span class="k">Kill-switch</span><span id="ks">false</span></div>
-      <div class="kv"><span class="k">Flatten handler</span><span id="flatreg">false</span></div>
-      <div class="kv"><span class="k">Paper capital (USDT)</span><span id="funds">—</span></div>
-      <div style="margin-top:10px">
-        <button id="flatten" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;background:#7a2d2d;color:#fff;font-weight:700">FLATTEN ALL</button>
-        <button id="resume" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;background:#2d4a7a;color:#fff;font-weight:700;margin-top:8px">RESUME</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="foot">Crypto Mission Control · live Binance feed · paper orders only unless LIVE_TRADING=1 · not financial advice</div>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
   <script>
-    const API = (document.querySelector('meta[name="quant-api-base"]').content || '').replace(/\/$/, '');
-    let latest = 0;
-    let tripped = false;
-    const syms = {};
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: {
+        fontFamily: {
+          sans: ['"IBM Plex Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+        },
+        colors: {
+          bg:'#020617', card:'#0E1223', muted:'#1A1E2F', line:'#1E293B',
+          fg:'#F8FAFC', dim:'#94A3B8', pos:'#22C55E', neg:'#EF4444',
+          warn:'#F59E0B', info:'#3B82F6',
+        },
+      } },
+    };
+  </script>
 
-    async function j(url, opts) {
-      const r = await fetch(API + url, opts);
-      return r.json();
+  <style>
+    :root { color-scheme: dark; }
+    body { background: #020617; }
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(30,41,59,.35) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(30,41,59,.35) 1px, transparent 1px);
+      background-size: 32px 32px;
     }
+    .glow-text { text-shadow: 0 0 12px rgba(34,197,94,.55); }
+    .card { background:#0E1223; border:1px solid #1E293B; border-radius:.75rem; }
+    .mono { font-family:'IBM Plex Mono',monospace; font-variant-numeric: tabular-nums; }
+    .scanline { position:relative; overflow:hidden; }
+    .scanline::after { content:''; position:absolute; inset:0; pointer-events:none;
+      background: linear-gradient(transparent 96%, rgba(34,197,94,.05) 100%); }
+    @keyframes pulse-red { 0%,100% { box-shadow:0 0 0 0 rgba(239,68,68,.7); background:#7f1d1d; }
+      50% { box-shadow:0 0 0 14px rgba(239,68,68,0); background:#ef4444; } }
+    .killswitch-active { animation: pulse-red 1s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:.25;} }
+    .blink { animation: blink 1s steps(2,start) infinite; }
+    .neuron-on{background:#22C55E;box-shadow:0 0 6px rgba(34,197,94,.8);}
+    .neuron-mid{background:#F59E0B;box-shadow:0 0 6px rgba(245,158,11,.7);}
+    .neuron-off{background:#1E293B;}
+    ::-webkit-scrollbar{width:8px;height:8px;}
+    ::-webkit-scrollbar-thumb{background:#1E293B;border-radius:4px;}
+    ::-webkit-scrollbar-track{background:transparent;}
+    @media (prefers-reduced-motion: reduce){ .killswitch-active,.blink{animation:none;} *{transition:none!important;} }
+  </style>
+</head>
 
-    function setConn(ok, txt) {
-      const c = document.getElementById('conn');
-      c.textContent = txt;
-      c.className = ok ? 'ok' : '';
+<body class="grid-bg font-sans text-fg antialiased min-h-screen">
+  <div class="max-w-[1600px] mx-auto p-3 md:p-4 space-y-3">
+
+    <!-- ══════ SECTION 1: SYSTEM BAR ══════ -->
+    <header class="card px-4 py-3 flex flex-wrap items-center gap-4">
+      <div class="flex items-center gap-3">
+        <div id="statusDot" class="w-3 h-3 rounded-full bg-warn" aria-hidden="true"></div>
+        <div>
+          <h1 class="text-sm font-semibold tracking-wide leading-tight">CRYPTO MISSION CONTROL</h1>
+          <p class="text-[11px] text-dim mono">AUTONOMOUS QUANT · SPOT BTC/ETH · COINBASE</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 ml-auto flex-wrap">
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-line bg-muted/50">
+          <span class="text-[10px] uppercase tracking-wider text-dim">Mode</span>
+          <span id="modeChip" class="mono text-xs font-semibold text-dim">—</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-line bg-muted/50">
+          <span class="text-[10px] uppercase tracking-wider text-dim">Symbols</span>
+          <span id="engineSymbol" class="mono text-xs font-semibold text-fg">—</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-line bg-muted/50">
+          <span class="text-[10px] uppercase tracking-wider text-dim">Capital</span>
+          <span id="balanceVal" class="mono text-xs font-semibold text-pos">—</span>
+        </div>
+        <div id="connChip" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-warn/50 bg-warn/10"
+             title="Whether this page has reached a live engine. NOT CONNECTED = every panel is empty by design.">
+          <span class="text-[10px] uppercase tracking-wider text-dim">Engine</span>
+          <span id="connState" class="mono text-xs font-semibold text-warn">NOT CONNECTED</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-line bg-muted/50">
+          <span class="text-[10px] uppercase tracking-wider text-dim">Market</span>
+          <span id="regime" class="mono text-xs font-semibold text-dim">—</span>
+        </div>
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-line bg-muted/50">
+          <span class="text-[10px] uppercase tracking-wider text-dim">Last</span>
+          <span id="vix" class="mono text-xs font-semibold text-fg">—</span>
+          <span id="vixChg" class="mono text-[11px] text-dim">—</span>
+        </div>
+        <button id="killswitch"
+          class="px-4 py-2 rounded-lg border border-neg/60 bg-neg/10 text-neg font-semibold text-sm tracking-wider
+                 hover:bg-neg/20 focus:outline-none focus:ring-2 focus:ring-neg/60 transition-colors cursor-pointer"
+          aria-pressed="false" aria-label="Toggle execution kill switch">
+          <span class="mono">⏻ KILLSWITCH</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- ══════ SECTION 2: MODEL + FEATURES + STATE ══════ -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <div class="card p-4 lg:col-span-4 scanline">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim mb-2">Neurons Firing — Mamba Inference</h2>
+        <div class="flex items-center gap-4">
+          <svg viewBox="0 0 160 90" class="w-44 shrink-0" role="img" aria-label="Inference probability gauge">
+            <defs><linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#3B82F6"/><stop offset="60%" stop-color="#22C55E"/><stop offset="100%" stop-color="#F59E0B"/>
+            </linearGradient></defs>
+            <path d="M 20 80 A 60 60 0 0 1 140 80" fill="none" stroke="#1E293B" stroke-width="12" stroke-linecap="round"/>
+            <path id="gaugeArc" d="M 20 80 A 60 60 0 0 1 140 80" fill="none" stroke="url(#gaugeGrad)" stroke-width="12" stroke-linecap="round"
+                  stroke-dasharray="188.5" stroke-dashoffset="188.5" style="transition: stroke-dashoffset .6s cubic-bezier(.4,0,.2,1)"/>
+          </svg>
+          <div>
+            <div class="mono text-4xl font-semibold glow-text" id="probVal">—</div>
+            <div class="text-[11px] text-dim mt-1">P(Velocity &gt; Threshold)</div>
+            <div class="text-[11px] text-dim mono mt-2" id="probStatus">waiting for engine</div>
+          </div>
+        </div>
+        <div class="mt-3 flex justify-between text-[10px] text-dim mono">
+          <span id="thrLine">THRESHOLD —</span><span id="probDelta">—</span>
+        </div>
+      </div>
+
+      <div class="lg:col-span-5 grid grid-cols-2 gap-3">
+        <div class="card p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Order Flow Imbalance</div>
+          <div class="mono text-2xl font-semibold mt-1" id="ofi">—</div>
+          <div class="text-[11px] text-dim mono mt-1" id="ofiDelta">taker buy/sell skew</div>
+        </div>
+        <div class="card p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Price Δ (window)</div>
+          <div class="mono text-2xl font-semibold mt-1" id="vgex">—</div>
+          <div class="text-[11px] text-dim mono mt-1" id="vgexDelta">—</div>
+        </div>
+        <div class="card p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Volume Δ (24h)</div>
+          <div class="mono text-2xl font-semibold mt-1" id="ivSkew">—</div>
+          <div class="text-[11px] text-dim mono mt-1" id="ivSkewDelta">—</div>
+        </div>
+        <div class="card p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Spread</div>
+          <div class="mono text-2xl font-semibold mt-1" id="taker">—</div>
+          <div class="text-[11px] text-dim mono mt-1" id="takerDelta">bps</div>
+        </div>
+      </div>
+
+      <div class="card p-4 lg:col-span-3">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim mb-2">Order-Flow Activity</h2>
+        <div id="neuralMatrix" class="grid grid-cols-12 gap-1" aria-label="Order-flow activity matrix"></div>
+        <div class="flex justify-between text-[10px] text-dim mt-2">
+          <span id="matrixMeta">ticks —</span><span class="mono" id="activeNeurons">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════ SECTION 3: STRATEGY & PIPELINE ══════ -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <div class="card p-4 lg:col-span-4">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim mb-2">Active Strategy & Odds</h2>
+        <div class="text-base font-semibold" id="strategyName">—</div>
+        <div class="text-[11px] text-dim mt-1 mono" id="strategyMeta">strategy config appears when the engine runs</div>
+        <div class="grid grid-cols-2 gap-3 mt-4">
+          <div class="rounded-lg border border-line bg-muted/40 p-3">
+            <div class="text-[10px] uppercase tracking-widest text-dim">Win Probability</div>
+            <div class="mono text-3xl font-semibold text-pos glow-text mt-1" id="winProb">—</div>
+          </div>
+          <div class="rounded-lg border border-line bg-muted/40 p-3">
+            <div class="text-[10px] uppercase tracking-widest text-dim">Risk : Reward</div>
+            <div class="mono text-3xl font-semibold text-info mt-1" id="riskReward">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="card p-4 lg:col-span-8">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim mb-3">Procedure Pipeline</h2>
+        <ol id="pipeline" class="grid grid-cols-2 md:grid-cols-6 gap-2"></ol>
+      </div>
+    </section>
+
+    <!-- ══════ SECTION 4: EQUITY + SESSION + TAPE ══════ -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+      <div class="card p-4 lg:col-span-7">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim mb-2">Intraday Equity Curve</h2>
+        <div class="h-52"><canvas id="equityChart" role="img" aria-label="Equity curve"></canvas></div>
+      </div>
+      <div class="card p-4 lg:col-span-5">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim mb-2">Session · Intraday <span class="text-info" style="opacity:.7">real telemetry</span></h2>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div><div class="text-[10px] text-dim">Session PnL</div><div class="mono text-base" id="sessPnl">—</div></div>
+          <div><div class="text-[10px] text-dim">Trades</div><div class="mono text-base" id="sessEntries">—</div></div>
+          <div><div class="text-[10px] text-dim">Ticks</div><div class="mono text-base" id="sessOpen">—</div></div>
+          <div><div class="text-[10px] text-dim">Last prob</div><div class="mono text-base" id="sessProb">—</div></div>
+        </div>
+        <div class="mt-4 pt-3 border-t border-line">
+          <h2 class="text-[11px] uppercase tracking-widest text-dim mb-2">Live Tape <span id="liveTapeState" class="text-warn">(connecting…)</span></h2>
+          <div class="text-[10px] mono text-dim mb-1" id="liveTapeStats">waiting for feed…</div>
+          <div id="liveTapeList" class="h-32 overflow-y-auto font-mono text-[11px] leading-4 space-y-0.5"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════ SECTION 5: AI FEED ══════ -->
+    <section class="card p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim">AI Suggestion Feed — Cloud LLM Strategy Manager</h2>
+        <span class="text-[10px] mono text-warn" id="connDot">● NOT CONNECTED — no engine</span>
+      </div>
+      <div id="aiFeed" class="font-mono text-xs space-y-1 h-40 overflow-y-auto bg-muted/40 rounded-lg p-3 border border-line"></div>
+    </section>
+
+    <footer class="text-center text-[10px] text-dim mono py-2">
+      CRYPTO MISSION CONTROL · engine-polled telemetry only · real kill-switch API (POST /api/v1/kill) ·
+      <span id="ingestLine">feed: —</span>
+    </footer>
+  </div>
+
+  <script>
+  /* Every figure is painted from an engine response or stays on its '—' empty
+     state; there is no simulated stream. Polling: 2.5s. */
+  const API_BASE = (function () {
+    const meta = document.querySelector('meta[name="quant-api-base"]');
+    const raw = (typeof window.QUANT_API_BASE === 'string' ? window.QUANT_API_BASE : '')
+      || (meta ? meta.getAttribute('content') : '') || '';
+    return String(raw).trim().replace(/\/+$/, '');
+  })();
+  const apiFetch = (p, o) => fetch(API_BASE + p, o);
+  const $ = (id) => document.getElementById(id);
+  const DASH = '—';
+  const num = (v) => (v === null || v === undefined || isNaN(v)) ? null : Number(v);
+  const money = (v) => v === null ? DASH : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
+  const count = (v) => v === null ? DASH : Number(v).toLocaleString();
+
+  const state = { killswitch: false, lastEvent: 0 };
+
+  // ── header tips ───────────────────────────────────────────────
+  const TIPS = {
+    probVal: 'The model\'s confidence that price velocity will break the threshold. High = expects a move.',
+    probStatus: 'What the model is signalling (LONG / FLAT).',
+    ofi: 'Order Flow Imbalance — net taker buying vs selling. Positive = buyers in control.',
+    vgex: 'Cumulative price change over the current window.',
+    ivSkew: 'Change in 24h traded volume over the window (activity).',
+    taker: 'Current top-of-book spread in basis points (cost to cross).',
+  };
+  Object.entries(TIPS).forEach(([id, t]) => { const e = $(id); if (e) e.title = t; });
+
+  // ── renderers ─────────────────────────────────────────────────
+  function setConnState(ok) {
+    const el = $('connState'); const chip = $('connChip'); const dot = $('statusDot');
+    el.textContent = ok ? 'CONNECTED' : 'NOT CONNECTED';
+    el.className = 'mono text-xs font-semibold ' + (ok ? 'text-pos' : 'text-warn');
+    chip.className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border ' +
+      (ok ? 'border-pos/50 bg-pos/10' : 'border-warn/50 bg-warn/10');
+    dot.className = 'w-3 h-3 rounded-full ' + (ok ? 'bg-pos' : 'bg-warn');
+    const cd = $('connDot');
+    cd.textContent = ok ? '● CONNECTED — live engine' : '● NOT CONNECTED — no engine';
+    cd.className = 'text-[10px] mono ' + (ok ? 'text-pos' : 'text-warn');
+  }
+
+  function setText(id, v) { const e = $(id); if (e) e.textContent = v; }
+
+  function renderGauge(prob, threshold) {
+    const arc = $('gaugeArc');
+    if (prob === null) {
+      setText('probVal', DASH); arc.setAttribute('stroke-dashoffset', '188.5');
+      setText('probStatus', 'no model session'); return;
     }
+    const frac = Math.max(0, Math.min(1, prob));
+    arc.setAttribute('stroke-dashoffset', String(188.5 * (1 - frac)));
+    const e = $('probVal'); e.textContent = (prob * 100).toFixed(1) + '%';
+    e.className = 'mono text-4xl font-semibold ' + (prob >= (threshold ?? 0.85) ? 'text-pos glow-text' : 'text-dim');
+    setText('probStatus', prob >= (threshold ?? 0.85) ? 'LONG signal' : 'FLAT — below threshold');
+    setText('thrLine', 'THRESHOLD ' + ((threshold ?? 0.85) * 100).toFixed(0) + '%');
+  }
 
-    function fmt(n) {
-      if (n === null || n === undefined || isNaN(n)) return '—';
-      return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
-    }
-    function signCls(n) { return n > 0 ? 'pos' : n < 0 ? 'neg' : 'flat'; }
-
-    function renderSyms(ms) {
-      const box = document.getElementById('syms');
+  function renderMatrix(ticks) {
+    const box = $('neuralMatrix'); const cells = 48;
+    if (box.children.length !== cells) {
       box.innerHTML = '';
-      // fall back to showing combined market state
-      const data = ms || {};
-      if (data.ltp) {
-        const d = document.createElement('div'); d.className = 'sym';
-        d.innerHTML = `<div class="n">MARKET</div><div class="v">$${fmt(data.ltp)}</div>`;
-        box.appendChild(d);
+      for (let i = 0; i < cells; i++) {
+        const d = document.createElement('div'); d.className = 'h-3 rounded-sm neuron-off'; box.appendChild(d);
       }
     }
+    const active = Math.min(cells, Math.max(0, Math.round((ticks || 0) / 12)));
+    let on = 0;
+    Array.from(box.children).forEach((c, i) => {
+      const lit = i < active;
+      c.className = 'h-3 rounded-sm ' + (lit ? (i % 3 === 0 ? 'neuron-on' : 'neuron-mid') : 'neuron-off');
+      if (lit) on++;
+    });
+    setText('activeNeurons', on ? on + ' active' : 'idle');
+  }
 
-    async function tick() {
-      try {
-        const st = await j('/api/v1/status');
-        setConn(true, 'live · ' + new Date().toLocaleTimeString());
-        const ms = st.marketstate || {};
-        renderSyms(ms);
+  function renderPipeline(steps) {
+    const ol = $('pipeline');
+    const fallback = ['L2 Ingest', 'Mamba Inference', 'Viability Guard', 'FOK Execution', 'Risk Rails', 'Shadow PnL'];
+    const rows = (steps && steps.length) ? steps : fallback.map(n => ({ name: n, state: 'pending' }));
+    ol.innerHTML = '';
+    rows.forEach((s) => {
+      const li = document.createElement('li');
+      const st = (s.state || 'pending');
+      const col = st === 'completed' ? 'border-pos/60 text-pos' : st === 'active' ? 'border-warn/60 text-warn blink'
+        : st === 'halted' ? 'border-neg/60 text-neg' : 'border-line text-dim';
+      li.className = 'rounded-lg border bg-muted/30 px-2 py-2 text-[10px] mono text-center ' + col;
+      li.textContent = s.name || s.step || '—';
+      ol.appendChild(li);
+    });
+  }
 
-        document.getElementById('mode2').textContent = st.mode;
-        document.getElementById('mode').textContent = (st.mode || 'paper').toUpperCase();
-        document.getElementById('mode').className = st.trading ? 'badge live' : 'badge paper';
-        document.getElementById('trading').textContent = String(st.trading);
-        document.getElementById('trading').className = st.trading ? 'pos' : 'flat';
-        document.getElementById('loss').textContent = '$' + fmt(st.engine?.max_daily_loss);
-        document.getElementById('maxpos').textContent = fmt(st.engine?.max_position);
-        document.getElementById('thr').textContent = fmt(st.engine?.prob_threshold);
+  function renderEquity(points) {
+    const cv = $('equityChart'); if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+    const pts = (points || []).map(p => p.pnl);
+    if (pts.length < 2) {
+      ctx.fillStyle = '#94A3B8'; ctx.font = '11px "IBM Plex Mono", monospace';
+      ctx.fillText('no session PnL yet — flat 0', 10, h / 2);
+      return;
+    }
+    const min = Math.min(...pts, 0), max = Math.max(...pts, 0);
+    const span = (max - min) || 1;
+    const x = (i) => 8 + i * (w - 16) / (pts.length - 1);
+    const y = (v) => h - 8 - ((v - min) / span) * (h - 16);
+    ctx.strokeStyle = '#1E293B'; ctx.beginPath(); ctx.moveTo(0, y(0)); ctx.lineTo(w, y(0)); ctx.stroke();
+    const last = pts[pts.length - 1];
+    ctx.strokeStyle = last >= 0 ? '#22C55E' : '#EF4444'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); pts.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
+  }
 
-        if (ms.ltp !== undefined) {
-          const el = document.getElementById('prob');
-          el.textContent = fmt(ms.ltp);
-        }
-        const ofi = document.getElementById('ofi');
+  // ── kill switch ───────────────────────────────────────────────
+  $('killswitch').addEventListener('click', async () => {
+    const on = !state.killswitch;
+    if (on && !confirm('Trip the kill-switch? All new orders halt immediately.')) return;
+    try { await apiFetch(on ? '/api/v1/kill' : '/api/v1/resume', { method: 'POST' }); } catch (e) {}
+  });
+
+  function renderKillswitch(on) {
+    state.killswitch = on;
+    const b = $('killswitch');
+    b.className = 'px-4 py-2 rounded-lg border font-semibold text-sm tracking-wider cursor-pointer transition-colors ' +
+      (on ? 'killswitch-active border-neg bg-neg/20 text-white' : 'border-neg/60 bg-neg/10 text-neg hover:bg-neg/20');
+    b.setAttribute('aria-pressed', String(on));
+  }
+
+  // ── main poll ─────────────────────────────────────────────────
+  setInterval(async () => {
+    try {
+      const res = await apiFetch('/api/v1/status');
+      if (!res.ok) throw new Error('http ' + res.status);
+      const body = await res.json();
+      setConnState(true);
+      if (body.killswitch !== state.killswitch) renderKillswitch(!!body.killswitch);
+
+      const m = body.mode || 'paper';
+      const modeEl = $('modeChip');
+      modeEl.textContent = m.toUpperCase();
+      modeEl.className = 'mono text-xs font-semibold ' + (m === 'live' ? 'text-neg' : 'text-info');
+
+      if (body.engine) {
+        const e = body.engine;
+        setText('engineSymbol', (e.symbols || []).join(' · '));
+        setText('strategyMeta', (e.symbols || []).join(' · ') + ' · qty ' +
+          Object.entries(e.quantities || {}).map(([k, v]) => k + '=' + v).join(' ') +
+          ' · loss ' + money(e.max_daily_loss));
+      }
+      setText('strategyName', body.mode === 'paper' ? 'Directional Velocity — single-leg spot' :
+        body.mode.toUpperCase() + ' engine');
+
+      // market state (live)
+      const ms = body.marketstate || {};
+      if (ms.ltp != null) {
+        setText('vix', money(ms.ltp)); setText('vixChg', ms.symbol || '');
+        setText('regime', ms.symbol || DASH);
         const imb = ms.taker_imbalance;
-        ofi.textContent = imb === null || imb === undefined ? '—' : (imb > 0 ? '+' : '') + (imb * 100).toFixed(1) + '%';
-        ofi.className = imb > 0 ? 'pos' : imb < 0 ? 'neg' : 'flat';
-        document.getElementById('ticks').textContent = fmt(ms.ticks_seen);
-
-        const pnl = st.telemetry?.total_pnl;
-        const pnlel = document.getElementById('pnl');
-        if (pnl !== undefined) { pnlel.textContent = (pnl > 0 ? '+' : '') + Number(pnl).toFixed(2); pnlel.className = signCls(pnl); }
-        document.getElementById('open').textContent = st.telemetry?.trades ?? 0;
-
-        tripped = st.killswitch;
-        const ks = document.getElementById('ks');
-        ks.textContent = String(tripped); ks.className = tripped ? 'neg' : 'pos';
-        const btn = document.getElementById('kill');
-        btn.textContent = tripped ? 'KILLED — trading halted' : 'ARMED — click to kill';
-        btn.className = tripped ? 'tripped' : '';
-        document.getElementById('flatreg').textContent = String(st.flatten_registered);
-
-        const f = await j('/api/v1/funds');
-        if (f.available !== undefined && f.available !== null) {
-          document.getElementById('funds').textContent = '$' + fmt(f.available) + ' (' + (f.source || '?') + ')';
+        const ofiEl = $('ofi'); ofiEl.textContent = imb == null ? DASH : (imb > 0 ? '+' : '') + (imb * 100).toFixed(1) + '%';
+        ofiEl.className = 'mono text-2xl font-semibold mt-1 ' + (imb > 0 ? 'text-pos' : imb < 0 ? 'text-neg' : 'text-dim');
+        setText('ofiDelta', 'taker buy/sell skew');
+        setText('vgex', ms.price_delta_bps == null ? DASH : (ms.price_delta_bps > 0 ? '+' : '') + ms.price_delta_bps + ' bps');
+        setText('vgexDelta', 'window ' + (ms.window || 0) + ' ticks');
+        setText('ivSkew', ms.volume_delta == null ? DASH : (ms.volume_delta >= 0 ? '+' : '') + Number(ms.volume_delta).toLocaleString(undefined, {maximumFractionDigits: 2}));
+        setText('ivSkewDelta', '24h traded volume change');
+        setText('taker', ms.spread_bps == null ? DASH : ms.spread_bps + ' bps');
+        setText('takerDelta', ms.spread == null ? DASH : 'spread ' + ms.spread);
+        renderMatrix(ms.ticks_seen || 0);
+        setText('matrixMeta', 'ticks ' + count(ms.ticks_seen || 0));
+        setText('sessOpen', count(ms.ticks_seen || 0));
+        // live tape row
+        const tl = $('liveTapeList'); if (tl) {
+          const line = document.createElement('div');
+          line.className = 'text-dim';
+          line.textContent = (ms.symbol || '') + '  ' + money(ms.ltp) + '  bid ' + money(ms.bid) + '  ask ' + money(ms.ask);
+          tl.prepend(line); while (tl.children.length > 40) tl.lastChild.remove();
+          setText('liveTapeState', '● live'); $('liveTapeState').className = 'text-pos';
+          setText('liveTapeStats', count(ms.ticks_seen || 0) + ' ticks in window');
         }
-      } catch (e) {
-        setConn(false, 'offline / unreachable');
+      } else {
+        setText('liveTapeState', '(no feed)'); $('liveTapeState').className = 'text-warn';
       }
 
-      // feed events
-      try {
-        const fe = await j('/api/v1/feed?since=' + latest);
-        latest = fe.latest;
-        const box = document.getElementById('feed');
-        if (box.textContent === 'awaiting events…') box.innerHTML = '';
-        for (const ev of (fe.events || []).reverse()) {
-          const d = document.createElement('div');
-          const t = document.createElement('span');
-          t.className = 'tag ' + (ev.kind || 'guard');
-          t.textContent = (ev.kind || 'evt').toUpperCase();
-          d.appendChild(t);
-          d.appendChild(document.createTextNode(ev.txt || ''));
-          box.prepend(d);
-        }
-        while (box.children.length > 60) box.lastChild.remove();
-      } catch (e) { /* feed poll best-effort */ }
+      // telemetry (model session)
+      const t = body.telemetry;
+      if (t) {
+        renderGauge(num(t.last_prob), num(t.threshold) ?? 0.85);
+        setText('sessPnl', money(t.total_pnl)); $('sessPnl').className = 'mono text-base ' + ((t.total_pnl || 0) >= 0 ? 'text-pos' : 'text-neg');
+        setText('sessEntries', count(t.trades));
+        setText('sessProb', t.last_prob == null ? DASH : (t.last_prob * 100).toFixed(1) + '%');
+        setText('winProb', t.win_rate == null ? DASH : (t.win_rate * 100).toFixed(0) + '%');
+        setText('riskReward', t.risk_reward == null ? DASH : Number(t.risk_reward).toFixed(2) + ' : 1');
+      } else {
+        renderGauge(null, 0.85);
+      }
+
+      // feed status footer
+      const f = body.feed || {};
+      const il = $('ingestLine');
+      if (f.market_open === false && f.recorder_armed) {
+        il.textContent = 'feed: ARMED · market closed · next open ' + (f.next_open_ist || '—');
+      } else if (f.ticks_received != null) {
+        il.textContent = 'feed: ' + count(f.ticks_received) + ' ticks';
+      } else {
+        il.textContent = 'feed: —';
+      }
+    } catch (e) {
+      setConnState(false);
     }
+  }, 2500);
 
-    async function act(url, confirmMsg) {
-      if (confirmMsg && !confirm(confirmMsg)) return;
-      try { await j(url, { method: 'POST' }); } catch (e) { setConn(false, 'action failed'); }
-    }
+  // ── equity + pipeline ─────────────────────────────────────────
+  async function pollEquity() {
+    try { const r = await apiFetch('/api/v1/equity'); if (r.ok) renderEquity((await r.json()).points); } catch (e) {}
+  }
+  async function pollPipeline() {
+    try { const r = await apiFetch('/api/v1/pipeline'); if (r.ok) renderPipeline((await r.json()).steps); } catch (e) {}
+  }
+  setInterval(pollEquity, 5000); pollEquity();
+  setInterval(pollPipeline, 5000); pollPipeline();
 
-    document.getElementById('kill').addEventListener('click', () =>
-      act('/api/v1/kill', tripped ? '' : 'Trip the kill-switch? All new orders halt.'));
-    document.getElementById('flatten').addEventListener('click', () => act('/api/v1/flatten', 'Force-flatten all positions?'));
-    document.getElementById('resume').addEventListener('click', () => act('/api/v1/resume', 'Clear the kill-switch?'));
+  // ── AI / event feed ───────────────────────────────────────────
+  setInterval(async () => {
+    try {
+      const b = await (await apiFetch('/api/v1/feed?since=' + state.lastEvent)).json();
+      state.lastEvent = b.latest || state.lastEvent;
+      const box = $('aiFeed');
+      (b.events || []).forEach(ev => {
+        const d = document.createElement('div');
+        const col = ev.color === 'drop' ? 'text-neg' : ev.color === 'ok' ? 'text-pos' : 'text-dim';
+        d.className = col;
+        d.textContent = '[' + (ev.kind || 'evt').toUpperCase() + '] ' + (ev.txt || '');
+        box.prepend(d);
+      });
+      while (box.children.length > 60) box.lastChild.remove();
+    } catch (e) {}
+  }, 3000);
 
-    tick();
-    setInterval(tick, 2500);
+  // ── funds ─────────────────────────────────────────────────────
+  setInterval(async () => {
+    try { const f = await (await apiFetch('/api/v1/funds')).json();
+      if (f.available != null) { $('balanceVal').textContent = money(f.available);
+        $('balanceVal').title = 'source: ' + (f.source || '?'); } } catch (e) {}
+  }, 10000);
   </script>
 </body>
 </html>
