@@ -463,11 +463,12 @@
   }, 3000);
 
   // ── funds ─────────────────────────────────────────────────────
-  setInterval(async () => {
+  async function pollFunds() {
     try { const f = await (await apiFetch('/api/v1/funds')).json();
       if (f.available != null) { $('balanceVal').textContent = money(f.available);
         $('balanceVal').title = 'source: ' + (f.source || '?'); } } catch (e) {}
-  }, 10000);
+  }
+  setInterval(pollFunds, 10000); pollFunds();
   </script>
 </body>
 </html>

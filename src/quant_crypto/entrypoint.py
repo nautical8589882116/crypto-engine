@@ -189,15 +189,22 @@ class ControlHandler(BaseHTTPRequestHandler):
             self._send(200, {"status": "ok"})
         elif path == "/api/v1/status":
             from quant_crypto.engine.telemetry import engine_snapshot
-            from quant_crypto.engine.market_state import market_state_snapshot
 
+            ms = _marketstate_from_tape() or {}
             self._send(
                 200,
                 {
                     "killswitch": is_process_kill_switch_tripped(),
                     "flatten_registered": _FLATTEN_HANDLER is not None,
                     "telemetry": engine_snapshot(),
-                    "marketstate": _marketstate_from_tape() or {},
+                    "marketstate": ms,
+                    "feed": {
+                        "recorder_armed": os.environ.get("AUTO_RECORD") == "1",
+                        "source": cfg.market_data_source,
+                        "ticks_received": ms.get("ticks_seen", 0),
+                        "symbol": ms.get("symbol"),
+                        "market_open": True if ms else None,
+                    },
                     "mode": "live" if cfg.live_trading else "paper",
                     "trading": bool(cfg.live_trading),
                     "engine": {
@@ -213,7 +220,8 @@ class ControlHandler(BaseHTTPRequestHandler):
             capital = float(cfg.paper_starting_capital)
             self._send(
                 200,
-                {"available": capital, "withdrawable": 0.0, "source": "paper", "client": "binance-paper"},
+                {"available": capital, "withdrawable": 0.0, "source": "paper",
+                 "client": f"{cfg.market_data_source}-paper"},
             )
         elif path == "/api/v1/marketstate":
             self._send(200, _marketstate_from_tape() or {})
