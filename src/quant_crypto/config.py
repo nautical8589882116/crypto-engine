@@ -7,9 +7,10 @@ flag and requires a daily loss limit and positive per-position sizing.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Default per-symbol position sizing in BASE units (what one "lot" of BTC/ETH
 # means here). These are NOT Binance lot sizes — crypto spot trades in fractional
@@ -50,9 +51,10 @@ class Settings(BaseSettings):
     max_position: float = Field(
         default=0.001, gt=0, description="Per-symbol position cap in BASE units"
     )
-    crypto_symbols: list[str] = Field(
+    crypto_symbols: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["BTCUSDT", "ETHUSDT"],
-        description="Spot symbols the engine records/trades (base quote pairs).",
+        description="Spot symbols the engine records/trades (base quote pairs). "
+        "Accepts a JSON list or a comma-separated string (CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT).",
     )
     quantities: dict[str, float] = Field(
         default_factory=lambda: dict(DEFAULT_QUANTITIES),
@@ -82,6 +84,27 @@ class Settings(BaseSettings):
         description="Notional paper capital in USDT. Reported by /api/v1/funds "
         "whenever LIVE_TRADING is off, labelled source='paper'.",
     )
+
+    @field_validator("crypto_symbols", mode="before")
+    @classmethod
+    def _parse_symbols(cls, v):
+        """Accept a comma-separated string, a JSON list, or a real list.
+
+        The field is annotated NoDecode so pydantic-settings hands us the raw
+        env string; we normalize here (a plain JSON list would otherwise crash
+        the app with a SettingsError at startup).
+        """
+        if isinstance(v, str):
+            s = v.strip()
+            if s.startswith("["):
+                import json
+
+                try:
+                    return json.loads(s)
+                except ValueError:
+                    pass
+            return [part.strip() for part in s.split(",") if part.strip()]
+        return v
 
     @model_validator(mode="after")
     def _validate_live_requires_safeguards(self) -> "Settings":
