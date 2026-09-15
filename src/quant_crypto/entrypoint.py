@@ -197,8 +197,8 @@ class ControlHandler(BaseHTTPRequestHandler):
                     "killswitch": is_process_kill_switch_tripped(),
                     "flatten_registered": _FLATTEN_HANDLER is not None,
                     "telemetry": engine_snapshot(),
-                    "marketstate": market_state_snapshot(),
-                    "mode": "live" if (cfg.live_trading and cfg.binance_api_key) else "paper",
+                    "marketstate": _marketstate_from_tape() or {},
+                    "mode": "live" if cfg.live_trading else "paper",
                     "trading": bool(cfg.live_trading),
                     "engine": {
                         "symbols": cfg.crypto_symbols,
