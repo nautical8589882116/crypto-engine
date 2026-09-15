@@ -71,6 +71,7 @@ def main() -> None:
     tele = {
         "ticks_processed": 0, "inferences": 0, "trades": 0, "wins": 0,
         "losses": 0, "total_pnl": 0.0, "last_prob": None,
+        "entries": 0, "open_positions": 0,
         "threshold": settings.prob_threshold, "session_source": "coinbase-live",
         "mode": "paper", "updated_at": time.time(),
     }
@@ -132,6 +133,8 @@ def main() -> None:
                     "entry": entry, "qty": qty,
                     "tp": entry * (1 + tp_pct), "sl": entry * (1 - sl_pct), "prob": prob,
                 }
+                tele["entries"] += 1
+            tele["open_positions"] = len(open_pos)
 
     async def loop() -> None:
         # tail the tape: start at current end, read new lines as they are appended
