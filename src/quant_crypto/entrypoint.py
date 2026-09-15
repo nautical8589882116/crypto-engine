@@ -122,13 +122,27 @@ def _marketstate_from_tape() -> dict:
 _EQUITY_HISTORY: list = []
 
 
+def _telemetry_from_file() -> dict | None:
+    """Engine telemetry published by the engine worker subprocess, if any."""
+    rec = os.environ.get("RECORD_DIR", "/data/tapes")
+    p = Path(rec) / "telemetry.json"
+    try:
+        if p.is_file():
+            d = json.loads(p.read_text())
+            if isinstance(d, dict):
+                return d
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _equity_snapshot() -> dict:
     """Rolling PnL series for the equity curve (from engine telemetry)."""
     import time as _t
 
     from quant_crypto.engine.telemetry import engine_snapshot
 
-    snap = engine_snapshot() or {}
+    snap = _telemetry_from_file() or engine_snapshot() or {}
     pnl = float(snap.get("total_pnl", 0.0) or 0.0)
     if not _EQUITY_HISTORY or _EQUITY_HISTORY[-1]["pnl"] != pnl:
         _EQUITY_HISTORY.append({"t": _t.time(), "pnl": pnl})
@@ -143,9 +157,9 @@ def _equity_snapshot() -> dict:
 def _pipeline_steps() -> list:
     """Pipeline display rows from real telemetry counters (or idle)."""
     try:
-        from quant_crypto.engine.telemetry import build_pipeline_steps, engine_snapshot
+        from quant_crypto.engine.telemetry import build_pipeline_steps
 
-        snap = engine_snapshot()
+        snap = _telemetry_from_file()
         if snap:
             return build_pipeline_steps(snap)
     except Exception:  # noqa: BLE001
@@ -196,7 +210,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                 {
                     "killswitch": is_process_kill_switch_tripped(),
                     "flatten_registered": _FLATTEN_HANDLER is not None,
-                    "telemetry": engine_snapshot(),
+                    "telemetry": _telemetry_from_file() or engine_snapshot(),
                     "marketstate": ms,
                     "feed": {
                         "recorder_armed": os.environ.get("AUTO_RECORD") == "1",
@@ -292,12 +306,79 @@ def main() -> None:
     # when AUTO_RECORD is set, the recorder runs as its OWN subprocess.
     if os.environ.get("AUTO_RECORD") == "1":
         _spawn_recorder()
+    if os.environ.get("ENGINE_SESSION") == "1":
+        _spawn_engine()
+    if os.environ.get("STRATEGY_SESSION") == "1":
+        threading.Thread(target=_strategy_thread, daemon=True, name="llm-strategy").start()
     log.info("starting crypto brain", extra={"extra_fields": {"port": port, "dashboard": str(_DASHBOARD)}})
     server = HTTPServer(("0.0.0.0", port), ControlHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+
+
+def _strategy_thread() -> None:
+    """Periodic Tier-1 LLM strategy run — publishes dashboard feed events.
+
+    Builds a market snapshot from the live tape, asks the LLM to pick a regime
+    and execution params, persists the config (so the engine worker can read
+    TP/SL cross-process) and surfaces the decision in the feed.
+    """
+    import time as _t
+
+    from quant_crypto.cloud.librarian import Librarian
+    from quant_crypto.cloud.llm import get_client
+    from quant_crypto.cloud.premarket import PremarketSnapshot
+    from quant_crypto.cloud.strategy_manager import StrategyManager
+
+    settings = get_settings()
+    provider = "anthropic" if settings.anthropic_api_key else ("openai" if settings.openai_api_key else "")
+    if not provider:
+        log.warning("STRATEGY_SESSION=1 but no LLM API key set — strategy idle")
+        return
+    try:
+        mgr = StrategyManager(get_client(settings, provider),
+                              librarian=Librarian(os.environ.get("QUANT_DB_PATH", "/data/librarian.db")))
+    except Exception:  # noqa: BLE001
+        log.exception("LLM strategy init failed")
+        return
+    interval = float(os.environ.get("STRATEGY_INTERVAL_S", "900"))
+    rec = Path(os.environ.get("RECORD_DIR", "/data/tapes"))
+    while True:
+        try:
+            ms = _marketstate_from_tape() or {}
+            snap = PremarketSnapshot(
+                btc_24h_return_pct=float(ms.get("price_delta_bps") or 0.0),
+                btc_volatility_pct=float(ms.get("spread_bps") or 0.0),
+                global_taker_imbalance=float(ms.get("taker_imbalance") or 0.0),
+                source="live-tape",
+            )
+            cfg = mgr.run_daily(snap)
+            try:
+                rec.mkdir(parents=True, exist_ok=True)
+                (rec / "strategy.json").write_text(cfg.model_dump_json())
+            except OSError:
+                pass
+            log.info("LLM strategy applied", extra={"extra_fields": {"regime": cfg.regime.value}})
+        except Exception:  # noqa: BLE001
+            log.exception("strategy run failed")
+        _t.sleep(interval)
+
+
+def _spawn_engine() -> None:
+    """Launch the paper inference engine as a separate subprocess."""
+    import subprocess
+    import sys
+
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "quant_crypto.engine_worker"],
+            env=dict(os.environ), start_new_session=True,
+        )
+        log.info("engine worker spawned as subprocess")
+    except Exception:  # noqa: BLE001
+        log.exception("failed to spawn engine worker")
 
 
 def _spawn_recorder() -> None:
