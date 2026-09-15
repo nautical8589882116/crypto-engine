@@ -13,3 +13,8 @@ models/
 *.onnx
 *.pt
 *.npz
+
+# local dev helpers
+.gitcred.sh
+train_lite.py
+split_tape.py
