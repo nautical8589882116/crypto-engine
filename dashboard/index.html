@@ -410,8 +410,10 @@
       // telemetry (model session)
       const t = body.telemetry;
       if (t) {
+        const tot = (num(t.total_pnl) || 0) + (num(t.unrealized_pnl) || 0);
         renderGauge(num(t.last_prob), num(t.threshold) ?? 0.85);
-        setText('sessPnl', money(t.total_pnl)); $('sessPnl').className = 'mono text-base ' + ((t.total_pnl || 0) >= 0 ? 'text-pos' : 'text-neg');
+        setText('sessPnl', money(tot)); $('sessPnl').className = 'mono text-base ' + (tot >= 0 ? 'text-pos' : 'text-neg');
+        $('sessPnl').title = 'realized ' + money(t.total_pnl) + ' + unrealized ' + money(t.unrealized_pnl);
         setText('sessEntries', count(t.entries ?? t.trades) + (t.open_positions ? ' (' + t.open_positions + ' open)' : ''));
         setText('sessProb', t.last_prob == null ? DASH : (t.last_prob * 100).toFixed(1) + '%');
         setText('winProb', t.win_rate == null ? DASH : (t.win_rate * 100).toFixed(0) + '%');

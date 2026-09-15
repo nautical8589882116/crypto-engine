@@ -74,7 +74,9 @@ def main() -> None:
         "entries": 0, "open_positions": 0,
         "threshold": settings.prob_threshold, "session_source": "coinbase-live",
         "mode": "paper", "updated_at": time.time(),
+        "unrealized_pnl": 0.0,
     }
+    last_px: dict[str, float] = {}
     tp_pct, sl_pct = 0.0015, 0.0015
     strategy_file = rec / "strategy.json"
 
@@ -135,6 +137,11 @@ def main() -> None:
                 }
                 tele["entries"] += 1
             tele["open_positions"] = len(open_pos)
+        # mark-to-market the open book (what the position is worth right now)
+        last_px[sym] = tick.ltp
+        tele["unrealized_pnl"] = round(
+            sum((last_px.get(s, p["entry"]) - p["entry"]) * p["qty"] for s, p in open_pos.items()), 6
+        )
 
     async def loop() -> None:
         # tail the tape: start at current end, read new lines as they are appended
