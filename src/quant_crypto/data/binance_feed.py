@@ -30,6 +30,18 @@ from pydantic import BaseModel
 SYMBOL_STREAM_TEMPLATE = "{symbol}@aggTrade/{symbol}@kline_1s"
 
 
+def _get_logger():
+    import logging
+
+    logger = logging.getLogger("quant_crypto.feed")
+    if not logger.handlers:
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+        logger.addHandler(h)
+        logger.setLevel(logging.INFO)
+    return logger
+
+
 class Tick(BaseModel):
     """A normalized market tick (epoch-second timestamp)."""
 
@@ -159,10 +171,12 @@ class BinanceTickFeed:
         streams = "/".join(self._streams())  # Binance combined streams use '/'
         ws_url = f"{self.url}/stream?streams={streams}"
         attempt = 0
+        log = _get_logger()
         while self.running:
             try:
                 async with self._ws.connect(ws_url, ping_interval=20) as sock:
                     attempt = 0
+                    log.info("binance ws connected: %s", ws_url)
                     async for msg in sock:
                         if not self.running:
                             break
@@ -172,9 +186,10 @@ class BinanceTickFeed:
                             self._on_message(json.loads(msg))
                         except Exception:  # noqa: BLE001
                             continue
-            except Exception:  # noqa: BLE001 - reconnect loop
+            except Exception as exc:  # noqa: BLE001 - reconnect loop
                 if not self.running:
                     break
+                log.warning("binance ws error (attempt %d): %r", attempt + 1, exc)
                 attempt += 1
                 if attempt > self.max_reconnects:
                     break
