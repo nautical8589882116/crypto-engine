@@ -1,0 +1,16 @@
+{
+  "released_from": "20260917-194614.onnx",
+  "parity_err": 0.0,
+  "windows_trained": 1500,
+  "positive": 682,
+  "val_loss": 0.6677,
+  "random_baseline": 0.693,
+  "config": {
+    "n_features": 3,
+    "d_model": 16,
+    "n_layers": 1
+  },
+  "corpus": "/opt/data/corpus_backfill/train_subset.npz",
+  "source": "binance-backfill (2,129,835 trades -> 85,169 windows)",
+  "note": "marginal signal (~0.025 below random); infrastructure demo, not a tradeable edge"
+}
