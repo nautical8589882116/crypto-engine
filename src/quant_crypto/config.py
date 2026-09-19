@@ -38,6 +38,20 @@ class Settings(BaseSettings):
         description="Route orders through Binance spot TESTNET instead of live.",
     )
 
+    # --- Broker (Coinbase Advanced Trade) ---
+    # All default-empty / False so the running paper service is unaffected.
+    coinbase_api_name: str = ""
+    coinbase_api_private_key: str = ""
+    coinbase_execution: bool = Field(
+        default=False,
+        description="Enable real Coinbase spot execution (inert unless LIVE_TRADING=1 "
+        "and market_data_source=coinbase).",
+    )
+    coinbase_testnet: bool = Field(
+        default=False,
+        description="Route orders through Coinbase sandbox / dry-run instead of live.",
+    )
+
     # --- LLM Providers (Tier 1 strategy) ---
     openai_api_key: str = ""
     openai_model: str = Field(default="gpt-4o")

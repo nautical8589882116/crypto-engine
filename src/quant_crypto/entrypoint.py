@@ -33,6 +33,34 @@ from quant_crypto.logging_util import get_logger
 log = get_logger("quant_crypto.entrypoint")
 
 
+def build_broker(settings=None):
+    """Broker factory: live CoinbaseBroker or PaperBroker.
+
+    Preferred over the current deployed paper path (which uses PaperEngine's
+    default PaperBroker). CoinbaseBroker is constructed ONLY when the operator
+    has explicitly enabled live trading AND Coinbase execution AND the market
+    source is coinbase AND credentials are set. Any other combination returns a
+    PaperBroker, so a normal paper run is byte-for-byte unchanged.
+
+    Drop-in seam for the live run: PaperEngine(broker=build_broker(settings),...).
+    """
+    settings = settings or get_settings()
+    if (
+        settings.live_trading
+        and settings.coinbase_execution
+        and settings.market_data_source == "coinbase"
+        and settings.coinbase_api_name
+        and settings.coinbase_api_private_key
+    ):
+        from quant_crypto.broker.coinbase import CoinbaseBroker
+
+        log.info("execution broker selected: CoinbaseBroker (live)")
+        return CoinbaseBroker(settings)
+    from quant_crypto.broker.base import PaperBroker
+
+    return PaperBroker.from_settings(settings)
+
+
 def _resolve_dashboard() -> Path:
     here = Path(__file__).resolve()
     candidates = [
@@ -51,6 +79,18 @@ def _resolve_dashboard() -> Path:
 
 _DASHBOARD = _resolve_dashboard()
 _FLATTEN_HANDLER = None
+
+
+def _kill_flag() -> Path:
+    """Cross-process kill-switch flag shared with the engine worker subprocess.
+
+    The worker runs in its own process and cannot see the in-process kill-switch
+    in quant_crypto.exec.risk, so trip/resume also write/remove this flag file in
+    RECORD_DIR. Named to match engine_worker.KILL_FLAG_NAME.
+    """
+    from quant_crypto.engine_worker import KILL_FLAG_NAME
+
+    return Path(os.environ.get("RECORD_DIR", "/data/tapes")) / KILL_FLAG_NAME
 
 
 def set_flatten_handler(handler) -> None:
@@ -208,7 +248,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             self._send(
                 200,
                 {
-                    "killswitch": is_process_kill_switch_tripped(),
+                    "killswitch": is_process_kill_switch_tripped() or _kill_flag().exists(),
                     "flatten_registered": _FLATTEN_HANDLER is not None,
                     "telemetry": _telemetry_from_file() or engine_snapshot(),
                     "marketstate": ms,
@@ -265,9 +305,19 @@ class ControlHandler(BaseHTTPRequestHandler):
     def _route_post(self) -> bool:
         if self.path == "/api/v1/kill":
             trip_process_kill_switch()
+            try:
+                _kill_flag().touch(exist_ok=True)
+            except OSError:
+                log.exception("failed to write kill-switch flag file")
             self._send(200, {"killswitch": True})
         elif self.path == "/api/v1/resume":
             reset_process_kill_switch()
+            try:
+                p = _kill_flag()
+                if p.exists():
+                    p.unlink()
+            except OSError:
+                log.exception("failed to remove kill-switch flag file")
             self._send(200, {"killswitch": False})
         elif self.path == "/api/v1/flatten":
             if _FLATTEN_HANDLER is None:

@@ -5,6 +5,18 @@ Mamba ONNX model over rolling windows, simulates paper entries/exits, and
 publishes telemetry to `telemetry.json` (cross-process, like latest.jsonl) so
 the control plane's dashboard can render inference, trades and PnL.
 
+Safety surface (all mirrored across processes so the worker can never be left
+unguarded by a control-plane that runs elsewhere):
+- Position cap: no new entry may push a symbol's gross position beyond
+  `max_position` (an existing open position already consumes part of the cap).
+- Daily-loss breaker: once realized `total_pnl <= -max_daily_loss` the worker
+  halts new entries and surfaces `halted` in telemetry.
+- Cross-process kill switch: the flag file `killswitch.flag` (in RECORD_DIR) is
+  checked each loop iteration and before each entry; `/api/v1/kill` creates it
+  and `/api/v1/resume` removes it, so the dashboard kill button stops this
+  worker even though it runs in a separate process. It is NOT reset by this
+  process, so it survives worker restarts until the operator resumes.
+
 Run with: ENGINE_MODEL=/data/models/x.onnx python -m quant_crypto.engine_worker
 """
 
@@ -20,6 +32,9 @@ from quant_crypto.config import get_settings
 from quant_crypto.data.binance_feed import Tick
 from quant_crypto.data.ring_buffer import RingBuffer
 from quant_crypto.data.window import window_from_snapshot
+
+# Cross-process kill-switch flag file name (shared with entrypoint.py).
+KILL_FLAG_NAME = "killswitch.flag"
 
 
 def _get_logger():
@@ -46,12 +61,177 @@ def _find_model() -> str | None:
     return None
 
 
+def _kill_flag(rec_dir: Path) -> Path:
+    """Path of the cross-process kill-switch flag (shared with entrypoint)."""
+    return rec_dir / KILL_FLAG_NAME
+
+
+class EngineWorkerCore:
+    """Inference + paper-sim core, kept separate from the tape loop for testing.
+
+    Holds the open book, telemetry and the three safety guards (position cap,
+    daily-loss breaker, cross-process kill-switch flag). `process(tick)` is the
+    same tailing entry used by the production loop; tests drive it directly with
+    a fake model and injected settings.
+    """
+
+    def __init__(self, model, settings, rec: Path):
+        self.model = model
+        self.settings = settings
+        self.rec = Path(rec).absolute()
+        self.killflag = _kill_flag(self.rec)
+
+        self.seq = model.seq_len
+        self.stride = settings.model_stride
+        self.buffers: dict[str, RingBuffer] = {}
+        self.counts: dict[str, int] = {}
+        self.open_pos: dict[str, dict] = {}
+
+        self.tele = {
+            "ticks_processed": 0, "inferences": 0, "trades": 0, "wins": 0,
+            "losses": 0, "total_pnl": 0.0, "last_prob": None,
+            "entries": 0, "open_positions": 0,
+            "threshold": settings.prob_threshold, "session_source": "coinbase-live",
+            "mode": "paper", "updated_at": time.time(),
+            "unrealized_pnl": 0.0,
+            # safety surface
+            "blocked": 0, "halted": False, "killswitch": False,
+        }
+        self.blocked_counts: dict[str, int] = {}
+        self.last_px: dict[str, float] = {}
+        self.tp_pct, self.sl_pct = 0.0015, 0.0015
+        self.strategy_file = self.rec / "strategy.json"
+
+    # --- safety guards -------------------------------------------------
+
+    def refresh_safety(self) -> None:
+        """Recompute halted/killswitch flags from live state.
+
+        `halted` derives from realized total_pnl (daily-loss breaker), so it only
+        clears when PnL recovers above the limit; `killswitch` mirrors the flag
+        file. Neither is mutated by accounting — they only gate new entries.
+        """
+        self.tele["killswitch"] = self.killflag.exists()
+        self.tele["halted"] = bool(self.tele["total_pnl"] <= -self.settings.max_daily_loss)
+
+    def entry_blocked(self, sym: str, qty: float) -> str | None:
+        """Reason an entry for `sym`/`qty` is blocked, else None.
+
+        Order: cross-process kill switch, daily-loss breaker, position cap. An
+        already-open position consumes part of the cap.
+        """
+        self.refresh_safety()
+        if self.tele["killswitch"]:
+            self._bump("kill_switch")
+            return "kill_switch"
+        if self.tele["halted"]:
+            self._bump("daily_loss")
+            return "daily_loss"
+        held = abs(self.open_pos.get(sym, {}).get("qty", 0.0))
+        if held + abs(qty) > self.settings.max_position:
+            self._bump("position_cap")
+            return "position_cap"
+        return None
+
+    def _bump(self, reason: str) -> None:
+        self.blocked_counts[reason] = self.blocked_counts.get(reason, 0) + 1
+        self.tele["blocked"] = sum(self.blocked_counts.values())
+
+    # --- strategy / telemetry ------------------------------------------
+
+    def read_strategy(self) -> None:
+        """Pick up the LLM's TP/SL if the strategy tier has published one."""
+        try:
+            if self.strategy_file.is_file():
+                d = json.loads(self.strategy_file.read_text())
+                self.tp_pct = float(d.get("take_profit_pct") or self.tp_pct)
+                self.sl_pct = float(d.get("stop_loss_pct") or self.sl_pct)
+                self.tele["strategy_regime"] = d.get("regime")
+        except (OSError, ValueError):
+            pass
+
+    def write_telemetry(self) -> None:
+        self.tele["updated_at"] = time.time()
+        try:
+            (self.rec / "telemetry.json").write_text(json.dumps(self.tele))
+        except OSError:
+            pass
+
+    # --- tick processing ------------------------------------------------
+
+    def process(self, tick: Tick) -> None:
+        sym = tick.symbol
+        if sym not in self.buffers:
+            self.buffers[sym] = RingBuffer(capacity=self.seq)
+            self.counts[sym] = 0
+        buf = self.buffers[sym]
+        buf.append(tick)
+        self.counts[sym] += 1
+        self.tele["ticks_processed"] += 1
+
+        # exits first (real subsequent prices)
+        pos = self.open_pos.get(sym)
+        if pos:
+            ltp = tick.ltp
+            reason = "take_profit" if ltp >= pos["tp"] else ("stop_loss" if ltp <= pos["sl"] else None)
+            if reason:
+                pnl = (ltp - pos["entry"]) * pos["qty"]
+                self.tele["total_pnl"] += pnl
+                self.tele["trades"] += 1
+                self.tele["wins" if pnl > 0 else "losses"] += 1
+                self.open_pos.pop(sym, None)
+
+        if buf.is_full and self.counts[sym] % self.stride == 0:
+            try:
+                prob = float(self.model.predict(window_from_snapshot(buf.snapshot())))
+            except Exception:  # noqa: BLE001
+                return
+            self.tele["inferences"] += 1
+            self.tele["last_prob"] = prob
+            if prob >= self.settings.prob_threshold and sym not in self.open_pos:
+                qty = self.settings.quantities.get(sym, self.settings.max_position)
+                # Safety gate: kill switch -> daily loss -> position cap.
+                if not self.entry_blocked(sym, qty):
+                    entry = tick.ask or tick.ltp
+                    self.open_pos[sym] = {
+                        "entry": entry, "qty": qty,
+                        "tp": entry * (1 + self.tp_pct), "sl": entry * (1 - self.sl_pct), "prob": prob,
+                    }
+                    self.tele["entries"] += 1
+            self.tele["open_positions"] = len(self.open_pos)
+        # mark-to-market the open book (what the position is worth right now)
+        self.last_px[sym] = tick.ltp
+        self.tele["unrealized_pnl"] = round(
+            sum((self.last_px.get(s, p["entry"]) - p["entry"]) * p["qty"] for s, p in self.open_pos.items()), 6
+        )
+
+
 def main() -> None:
     log = _get_logger()
     settings = get_settings()
+
+    # ------------------------------------------------------------------
+    # LIVE SEAM (GATED — DO NOT ENABLE).
+    #
+    # The deployed pipeline is 100% paper. The broker factory
+    # (entrypoint.build_broker) already selects a real coinbase broker when
+    # live_trading + coinbase_execution + market_data_source=coinbase are all
+    # set. Wire the Broker contract (get_depth/place_order/get_position from
+    # src/quant_crypto/broker/base.py) into EngineWorkerCore here to route
+    # entries/exits through a real broker. Until that is wired, flipping
+    # live_trading hard-fails at startup rather than silently paper-trading
+    # real-sized signals.
+    # ------------------------------------------------------------------
+    if settings.live_trading:
+        raise RuntimeError(
+            "engine_worker live seam not yet wired via the Broker contract "
+            "(src/quant_crypto/broker/base.py) — refusing to trade. "
+            "Wire build_broker() into the entry path before setting LIVE_TRADING=1."
+        )
+
     rec = Path(os.environ.get("RECORD_DIR", "/data/tapes"))
+    rec.mkdir(parents=True, exist_ok=True)
     tape = rec / "latest.jsonl"
-    out = rec / "telemetry.json"
     model_path = _find_model()
     if not model_path:
         log.warning("no ONNX model found (ENGINE_MODEL / models/*.onnx) — engine worker idle")
@@ -63,85 +243,7 @@ def main() -> None:
     )
     log.info("engine worker start: model=%s tape=%s", model_path, tape)
 
-    seq = model.seq_len
-    stride = settings.model_stride
-    buffers: dict[str, RingBuffer] = {}
-    counts: dict[str, int] = {}
-    open_pos: dict[str, dict] = {}
-    tele = {
-        "ticks_processed": 0, "inferences": 0, "trades": 0, "wins": 0,
-        "losses": 0, "total_pnl": 0.0, "last_prob": None,
-        "entries": 0, "open_positions": 0,
-        "threshold": settings.prob_threshold, "session_source": "coinbase-live",
-        "mode": "paper", "updated_at": time.time(),
-        "unrealized_pnl": 0.0,
-    }
-    last_px: dict[str, float] = {}
-    tp_pct, sl_pct = 0.0015, 0.0015
-    strategy_file = rec / "strategy.json"
-
-    def read_strategy() -> None:
-        """Pick up the LLM's TP/SL if the strategy tier has published one."""
-        nonlocal tp_pct, sl_pct
-        try:
-            if strategy_file.is_file():
-                d = json.loads(strategy_file.read_text())
-                tp_pct = float(d.get("take_profit_pct") or tp_pct)
-                sl_pct = float(d.get("stop_loss_pct") or sl_pct)
-                tele["strategy_regime"] = d.get("regime")
-        except (OSError, ValueError):
-            pass
-
-    def write_telemetry() -> None:
-        tele["updated_at"] = time.time()
-        try:
-            out.write_text(json.dumps(tele))
-        except OSError:
-            pass
-
-    def process(tick: Tick) -> None:
-        sym = tick.symbol
-        if sym not in buffers:
-            buffers[sym] = RingBuffer(capacity=seq)
-            counts[sym] = 0
-        buf = buffers[sym]
-        buf.append(tick)
-        counts[sym] += 1
-        tele["ticks_processed"] += 1
-
-        # exits first (real subsequent prices)
-        pos = open_pos.get(sym)
-        if pos:
-            ltp = tick.ltp
-            reason = "take_profit" if ltp >= pos["tp"] else ("stop_loss" if ltp <= pos["sl"] else None)
-            if reason:
-                pnl = (ltp - pos["entry"]) * pos["qty"]
-                tele["total_pnl"] += pnl
-                tele["trades"] += 1
-                tele["wins" if pnl > 0 else "losses"] += 1
-                open_pos.pop(sym, None)
-
-        if buf.is_full and counts[sym] % stride == 0:
-            try:
-                prob = float(model.predict(window_from_snapshot(buf.snapshot())))
-            except Exception:  # noqa: BLE001
-                return
-            tele["inferences"] += 1
-            tele["last_prob"] = prob
-            if prob >= settings.prob_threshold and sym not in open_pos:
-                qty = settings.quantities.get(sym, settings.max_position)
-                entry = tick.ask or tick.ltp
-                open_pos[sym] = {
-                    "entry": entry, "qty": qty,
-                    "tp": entry * (1 + tp_pct), "sl": entry * (1 - sl_pct), "prob": prob,
-                }
-                tele["entries"] += 1
-            tele["open_positions"] = len(open_pos)
-        # mark-to-market the open book (what the position is worth right now)
-        last_px[sym] = tick.ltp
-        tele["unrealized_pnl"] = round(
-            sum((last_px.get(s, p["entry"]) - p["entry"]) * p["qty"] for s, p in open_pos.items()), 6
-        )
+    core = EngineWorkerCore(model, settings, rec)
 
     async def loop() -> None:
         # tail the tape: start at current end, read new lines as they are appended
@@ -153,6 +255,10 @@ def main() -> None:
         last_write = 0.0
         while True:
             try:
+                # Cross-process kill switch is checked here (every iteration)
+                # so the worker stops opening entries shortly after /api/v1/kill
+                # even if no new ticks arrive.
+                core.refresh_safety()
                 if tape.is_file():
                     size = tape.stat().st_size
                     if size < pos_bytes:  # rotated
@@ -165,7 +271,7 @@ def main() -> None:
                                 if not line:
                                     continue
                                 try:
-                                    process(Tick.model_validate_json(line))
+                                    core.process(Tick.model_validate_json(line))
                                 except Exception:  # noqa: BLE001
                                     continue
                             pos_bytes = fh.tell()
@@ -173,15 +279,15 @@ def main() -> None:
                 pass
             now = time.time()
             if now - last_write > 1.0:
-                read_strategy()
-                write_telemetry()
+                core.read_strategy()
+                core.write_telemetry()
                 last_write = now
             await asyncio.sleep(0.5)
 
     try:
         asyncio.run(loop())
     except KeyboardInterrupt:
-        write_telemetry()
+        core.write_telemetry()
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ COPY dashboard ./dashboard
 COPY models ./models
 COPY --from=builder /build/wheels /build/wheels
 RUN pip install --no-cache-dir /build/wheels/*.whl \
-    && pip install --no-cache-dir websockets python-binance pydantic pydantic-settings onnxruntime httpx numpy
+    && pip install --no-cache-dir websockets python-binance pydantic pydantic-settings onnxruntime httpx numpy requests
 
 # Persistent tape/corpus store. No VOLUME (Railway rejects it); mount a Volume
 # at /data in Railway (Service > Settings > Volumes, mount path /data).
