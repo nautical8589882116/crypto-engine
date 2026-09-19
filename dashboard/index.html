@@ -207,6 +207,21 @@
       </div>
     </section>
 
+    <!-- ══════ SECTION 4b: SLIPPAGE COLUMN CHART ══════ -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim">Execution Slippage — per fill</h2>
+        <span id="slipMeta" class="mono text-[11px] text-dim">no fills yet</span>
+      </div>
+      <div class="relative h-56">
+        <canvas id="slipChart" role="img" aria-label="Column chart of execution slippage per fill in basis points"></canvas>
+      </div>
+      <div class="flex flex-wrap justify-between gap-x-6 gap-y-1 text-[10px] mono text-dim mt-1">
+        <span>X &nbsp;<span id="slipAxisX">sample time (HH:MM:SS)</span></span>
+        <span>Y &nbsp;<span id="slipAxisY">adverse slippage (basis points, bps)</span></span>
+      </div>
+    </div>
+
     <!-- ══════ SECTION 5: AI FEED ══════ -->
     <section class="card p-4">
       <div class="flex items-center justify-between mb-2">
@@ -446,6 +461,97 @@
   }
   setInterval(pollEquity, 5000); pollEquity();
   setInterval(pollPipeline, 5000); pollPipeline();
+
+  // ── slippage column chart ────────────────────────────────────────
+  function niceMax(v) { // round up to a readable chart-top
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    const n = v / p;
+    const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+    return step * p;
+  }
+  function renderSlippage(data) {
+    const cv = $('slipChart'); if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth || 900, h = cv.clientHeight || 224;
+    cv.width = w * dpr; cv.height = h * dpr;
+    const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const padL = 46, padR = 10, padT = 8, padB = 26;
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    const s = (data && data.series) || [];
+    const unit = (data && data.unit) || 'bps';
+
+    // Y scale: from 0 to a "nice" max of the observed bps
+    let top = niceMax(Math.max(0, ...s.map(p => Number(p.bps) || 0)));
+
+    // X: one column per fill; interpolate HH:MM:SS labels
+    const fmt = (t) => { try { const d = new Date(t * 1000); const p = n => String(n).padStart(2, '0');
+      return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); } catch (e) { return ''; } };
+
+    // horizontal gridlines + numeric Y tick labels
+    const yTicks = 4;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#94A3B8';
+    ctx.font = '10px "IBM Plex Mono", monospace';
+    for (let i = 0; i <= yTicks; i++) {
+      const val = top * i / yTicks;
+      const y = padT + plotH - (i / yTicks) * plotH;
+      ctx.strokeStyle = '#1E293B'; ctx.lineWidth = 1; ctx.beginPath();
+      ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+      ctx.fillText(val.toFixed(val >= 10 ? 0 : 2), padL - 6, y);
+    }
+    if (s.length) {
+      // bars
+      const bw = Math.max(2, Math.min(28, (plotW / s.length) * 0.6));
+      const y = (bps) => padT + plotH - (bps / top) * plotH;
+      s.forEach((p, i) => {
+        const x = padL + i * (plotW / s.length) + (plotW / s.length - bw) / 2;
+        const bps = Number(p.bps) || 0;
+        const col = p.side === 'exit' ? '#3B82F6' : '#22C55E'; // exit blue, entry green
+        if (bps > 0) {
+          ctx.fillStyle = col; ctx.fillRect(x, y(bps), bw, padT + plotH - y(bps));
+          ctx.fillStyle = '#F8FAFC'; ctx.font = '9px "IBM Plex Mono", monospace';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+          ctx.fillText(bps.toFixed(1), x + bw / 2, y(bps) - 2);
+        }
+      });
+      // X tick labels (show first/mid/last)
+      const idxs = [...new Set([0, Math.floor((s.length - 1) / 2), s.length - 1])];
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = '#94A3B8';
+      ctx.font = '9px "IBM Plex Mono", monospace';
+      idxs.forEach(i => {
+        if (i >= s.length) return;
+        const x = padL + i * (plotW / s.length) + (plotW / s.length) / 2;
+        ctx.fillText(fmt(s[i].t) + (s[i].sym || ''), x, padT + plotH + 6);
+      });
+    } else {
+      ctx.fillStyle = '#94A3B8'; ctx.font = '11px "IBM Plex Mono", monospace';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText('no fills yet — slippage appears once the worker enters/exits', padL + 8, padT + plotH / 2);
+    }
+    // axis titles
+    ctx.fillStyle = '#64748B'; ctx.font = '9px "IBM Plex Mono", monospace';
+    ctx.textAlign = 'right'; ctx.save();
+    ctx.translate(12, padT + plotH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText(unit, 0, 0); ctx.restore();
+
+    const meta = $('slipMeta');
+    if (s.length) {
+      const tot = Number(data.usd_total) || 0;
+      const n = Number(data.count) || 0;
+      meta.textContent = String(n) + ' fills · avg ' + (Number(data.avg_bps) || 0).toFixed(2) +
+        ' bps · cost $' + tot.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    } else {
+      meta.textContent = 'no fills yet';
+    }
+    $('slipAxisX').textContent = 'sample time (HH:MM:SS)';
+    $('slipAxisY').textContent = 'adverse slippage (basis points, bps)';
+  }
+  async function pollSlippage() {
+    try { const r = await apiFetch('/api/v1/slippage'); if (r.ok) renderSlippage(await r.json()); } catch (e) {}
+  }
+  setInterval(pollSlippage, 5000); pollSlippage();
 
   // ── AI / event feed ───────────────────────────────────────────
   setInterval(async () => {

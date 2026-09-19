@@ -281,6 +281,23 @@ class ControlHandler(BaseHTTPRequestHandler):
             self._send(200, _marketstate_from_tape() or {})
         elif path == "/api/v1/equity":
             self._send(200, _equity_snapshot())
+        elif path == "/api/v1/slippage":
+            snap = _telemetry_from_file() or {}
+            series = snap.get("slippage_series", []) or []
+            self._send(
+                200,
+                {
+                    "series": series,
+                    "unit": snap.get("slippage_unit", "basis points (1 bp = 0.01%)"),
+                    "count": snap.get("slippage_count", 0),
+                    "total_bps": snap.get("slippage_bps_total", 0.0),
+                    "usd_total": snap.get("slippage_usd_total", 0.0),
+                    "avg_bps": snap.get("slippage_avg_bps", 0.0),
+                    "last_bps": snap.get("slippage_last_bps", 0.0),
+                    "axis_x": "sample time (HH:MM:SS)",
+                    "axis_y": "adverse slippage (basis points, bps)",
+                },
+            )
         elif path == "/api/v1/pipeline":
             self._send(200, {"steps": _pipeline_steps()})
         elif path == "/api/v1/feed":

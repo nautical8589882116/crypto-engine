@@ -96,8 +96,43 @@ class EngineWorkerCore:
             "unrealized_pnl": 0.0,
             # safety surface
             "blocked": 0, "halted": False, "killswitch": False,
+            # execution-slippage (bps = adverse fill cost vs mid; USD = $ cost)
+            "slippage_series": [], "slippage_bps_total": 0.0,
+            "slippage_usd_total": 0.0, "slippage_count": 0,
+            "slippage_unit": "basis points (1 bp = 0.01%)",
         }
         self.blocked_counts: dict[str, int] = {}
+
+    # --- execution slippage ------------------------------------------
+    def _record_slippage(self, sym: str, side: str, fill: float, bid, ask, qty: float) -> None:
+        """Adverse execution cost of one fill, in basis points and USD.
+
+        Reference is the book mid; a filled buy above / a filled sell below mid
+        is slippage the engine pays. Fills that can't be priced (no bid+ask)
+        are counted at 0 bps rather than skipped.
+        """
+        try:
+            if bid is not None and ask is not None and ask > bid:
+                mid = (bid + ask) / 2.0
+            else:
+                mid = None
+        except TypeError:
+            mid = None
+        bps = 0.0
+        if mid and mid > 0:
+            bps = abs((fill - mid) / mid) * 1e4  # bps, always a cost to us
+        usd = fill * qty * bps / 1e4
+        self.tele["slippage_bps_total"] = float(self.tele.get("slippage_bps_total", 0.0)) + bps
+        self.tele["slippage_usd_total"] = float(self.tele.get("slippage_usd_total", 0.0)) + usd
+        self.tele["slippage_count"] = int(self.tele.get("slippage_count", 0)) + 1
+        series = self.tele.setdefault("slippage_series", [])
+        series.append({"t": time.time(), "sym": sym, "side": side,
+                       "fill": round(fill, 2), "bps": round(bps, 4), "usd": round(usd, 4)})
+        if len(series) > 300:
+            del series[:-300]
+        self.tele["slippage_last_bps"] = round(bps, 4)
+        self.tele["slippage_avg_bps"] = round(
+            self.tele["slippage_bps_total"] / max(1, self.tele["slippage_count"]), 4)
         self.last_px: dict[str, float] = {}
         self.tp_pct, self.sl_pct = 0.0015, 0.0015
         self.strategy_file = self.rec / "strategy.json"
@@ -179,6 +214,7 @@ class EngineWorkerCore:
                 self.tele["total_pnl"] += pnl
                 self.tele["trades"] += 1
                 self.tele["wins" if pnl > 0 else "losses"] += 1
+                self._record_slippage(sym, "exit", ltp, tick.bid, tick.ask, pos["qty"])
                 self.open_pos.pop(sym, None)
 
         if buf.is_full and self.counts[sym] % self.stride == 0:
@@ -197,6 +233,7 @@ class EngineWorkerCore:
                         "entry": entry, "qty": qty,
                         "tp": entry * (1 + self.tp_pct), "sl": entry * (1 - self.sl_pct), "prob": prob,
                     }
+                    self._record_slippage(sym, "entry", entry, tick.bid, tick.ask, qty)
                     self.tele["entries"] += 1
             self.tele["open_positions"] = len(self.open_pos)
         # mark-to-market the open book (what the position is worth right now)
