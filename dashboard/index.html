@@ -207,6 +207,36 @@
       </div>
     </section>
 
+    <!-- ══════ SECTION 4c: TOTAL PNL SUMMARY ══════ -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 class="text-[11px] uppercase tracking-widest text-dim">Total PnL — <span id="pnlScope" class="mono text-info">paper</span></h2>
+        <span id="pnlMeta" class="mono text-[11px] text-dim">awaiting equity poll…</span>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="rounded-lg border border-line bg-muted/30 p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim" id="pnlTitle">Paper PnL (all recordings)</div>
+          <div class="mono text-xl font-semibold mt-1 text-dim" id="pnlTotal">—</div>
+          <div class="text-[10px] text-dim mono mt-1" id="pnlSub">realized + unrealized</div>
+        </div>
+        <div class="rounded-lg border border-line bg-muted/30 p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Slippage cost</div>
+          <div class="mono text-xl font-semibold mt-1 text-warn" id="pnlSlippage">—</div>
+          <div class="text-[10px] text-dim mono mt-1">adverse fills (bps → $)</div>
+        </div>
+        <div class="rounded-lg border border-line border-pos/40 bg-muted/30 p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Net PnL (after slippage)</div>
+          <div class="mono text-xl font-semibold mt-1 text-dim" id="pnlNet">—</div>
+          <div class="text-[10px] text-dim mono mt-1">PnL − slippage cost</div>
+        </div>
+        <div class="rounded-lg border border-line bg-muted/30 p-3">
+          <div class="text-[10px] uppercase tracking-widest text-dim">Trades</div>
+          <div class="mono text-xl font-semibold mt-1 text-dim" id="pnlTrades">—</div>
+          <div class="text-[10px] text-dim mono mt-1" id="pnlMode">paper recordings</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ══════ SECTION 4b: SLIPPAGE COLUMN CHART ══════ -->
     <div class="card p-4">
       <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
@@ -253,7 +283,7 @@
   const money = (v) => v === null ? DASH : '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits: 2});
   const count = (v) => v === null ? DASH : Number(v).toLocaleString();
 
-  const state = { killswitch: false, lastEvent: 0 };
+  const state = { killswitch: false, lastEvent: 0, mode: 'paper', equity: null, slippage: null };
 
   // ── header tips ───────────────────────────────────────────────
   const TIPS = {
@@ -329,27 +359,80 @@
     });
   }
 
-  function renderEquity(points) {
+  function renderEquity(data) {
     const cv = $('equityChart'); if (!cv) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = cv.clientWidth, h = cv.clientHeight;
+    const w = cv.clientWidth || 640, h = cv.clientHeight || 208;
     cv.width = w * dpr; cv.height = h * dpr;
     const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
-    const pts = (points || []).map(p => p.pnl);
-    if (pts.length < 2) {
+
+    // tolerate the old bare-array shape AND the richer object shape {points, axis_y, axis_unit, ...}
+    const obj = (data && !Array.isArray(data)) ? data : {};
+    const pts = Array.isArray(data) ? data : (obj.points || []);
+    const yTitle = (obj.axis_y || obj.axis_unit) ? (obj.axis_y || 'PnL (USD $)') : 'PnL (USD $)';
+
+    const padL = 66, padR = 14, padT = 10, padB = 26;
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    if (plotW < 20 || plotH < 20) return;
+
+    const vals = pts.map(p => Number(p && p.pnl) || 0);
+    const rawMin = vals.length ? Math.min(...vals, 0) : 0;
+    const rawMax = vals.length ? Math.max(...vals, 0) : 0;
+    const sc = niceScale(rawMin, rawMax);
+    const ticks = Math.max(1, Math.round((sc.max - sc.min) / sc.step));
+    const X = (i) => padL + (pts.length > 1 ? i * plotW / (pts.length - 1) : plotW / 2);
+    const Y = (v) => padT + plotH - ((v - sc.min) / (sc.max - sc.min)) * plotH;
+    const fmt = (v) => { try { const d = new Date(v * 1000); const p = n => String(n).padStart(2, '0');
+      return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); } catch (e) { return ''; } };
+    const label = (v) => (sc.step < 1 ? v.toFixed(1) : v.toLocaleString(undefined, { maximumFractionDigits: 0 }));
+
+    // horizontal gridlines + numeric Y tick labels (USD $)
+    ctx.strokeStyle = '#1E293B'; ctx.lineWidth = 1; ctx.fillStyle = '#64748B';
+    ctx.font = '10px "IBM Plex Mono", monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let i = 0; i <= ticks; i++) {
+      const val = sc.min + i * sc.step;
+      const y = Y(val);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+      ctx.fillText(label(val), padL - 7, y);
+    }
+    // Y-axis title (rotated)
+    ctx.fillStyle = '#64748B'; ctx.font = '10px "IBM Plex Mono", monospace';
+    ctx.save(); ctx.translate(14, padT + plotH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center'; ctx.fillText(yTitle, 0, 0); ctx.restore();
+
+    // highlighted zero line when it falls inside the plotted span
+    if (sc.min < 0 && sc.max > 0) {
+      const zy = Y(0);
+      ctx.strokeStyle = '#22C55E'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(padL, zy); ctx.lineTo(w - padR, zy); ctx.stroke();
+      ctx.setLineDash([]); ctx.strokeStyle = '#F8FAFC'; ctx.fillText('0', padL - 7, zy);
+    }
+
+    // X tick labels from point timestamps (HH:MM:SS)
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = '#94A3B8';
+    ctx.font = '9px "IBM Plex Mono", monospace';
+    if (pts.length) {
+      const idxs = pts.length <= 3 ? pts.map((_, i) => i) :
+        [...new Set([0, Math.floor((pts.length - 1) / 2), pts.length - 1])];
+      idxs.forEach(i => { if (i >= pts.length) return; ctx.fillText(fmt(pts[i].t), X(i), padT + plotH + 7); });
+    }
+
+    if (pts.length === 0) {
       ctx.fillStyle = '#94A3B8'; ctx.font = '11px "IBM Plex Mono", monospace';
-      ctx.fillText('no session PnL yet — flat 0', 10, h / 2);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText('no session PnL yet — flat 0 (axes ready, awaiting points)', padL + 8, padT + plotH / 2);
       return;
     }
-    const min = Math.min(...pts, 0), max = Math.max(...pts, 0);
-    const span = (max - min) || 1;
-    const x = (i) => 8 + i * (w - 16) / (pts.length - 1);
-    const y = (v) => h - 8 - ((v - min) / span) * (h - 16);
-    ctx.strokeStyle = '#1E293B'; ctx.beginPath(); ctx.moveTo(0, y(0)); ctx.lineTo(w, y(0)); ctx.stroke();
-    const last = pts[pts.length - 1];
-    ctx.strokeStyle = last >= 0 ? '#22C55E' : '#EF4444'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); pts.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))); ctx.stroke();
+
+    // polyline (green when last point >= 0, red otherwise)
+    const lineCol = vals[vals.length - 1] >= 0 ? '#22C55E' : '#EF4444';
+    ctx.strokeStyle = lineCol; ctx.lineWidth = 1.5; ctx.beginPath();
+    vals.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v))); ctx.stroke();
+    if (pts.length <= 2) { // still draw the point/flat marker explicitly on tiny samples
+      ctx.fillStyle = lineCol;
+      pts.forEach((p, i) => { ctx.beginPath(); ctx.arc(X(i), Y(Number(p.pnl) || 0), 3, 0, Math.PI * 2); ctx.fill(); });
+    }
   }
 
   // ── kill switch ───────────────────────────────────────────────
@@ -377,7 +460,8 @@
       if (body.killswitch !== state.killswitch) renderKillswitch(!!body.killswitch);
 
       const m = body.mode || 'paper';
-      const modeEl = $('modeChip');
+            state.mode = m;
+            const modeEl = $('modeChip');
       modeEl.textContent = m.toUpperCase();
       modeEl.className = 'mono text-xs font-semibold ' + (m === 'live' ? 'text-neg' : 'text-info');
 
@@ -454,9 +538,15 @@
 
   // ── equity + pipeline ─────────────────────────────────────────
   async function pollEquity() {
-    try { const r = await apiFetch('/api/v1/equity'); if (r.ok) renderEquity((await r.json()).points); } catch (e) {}
-  }
-  async function pollPipeline() {
+      try {
+        const r = await apiFetch('/api/v1/equity'); if (!r.ok) return;
+        const j = await r.json();
+        state.equity = j;
+        renderEquity(j);
+        updatePnlPanel();
+      } catch (e) {}
+    }
+    async function pollPipeline() {
     try { const r = await apiFetch('/api/v1/pipeline'); if (r.ok) renderPipeline((await r.json()).steps); } catch (e) {}
   }
   setInterval(pollEquity, 5000); pollEquity();
@@ -469,6 +559,18 @@
     const n = v / p;
     const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
     return step * p;
+  }
+  function niceScale(lo, hi) { // round {min,max,step} for the equity Y axis (covers data and 0)
+    if (lo === 0 && hi === 0) return { min: -1, max: 1, step: 0.5 };
+    const span = (hi - lo) || 1;
+    const step0 = span / 4;
+    const p = Math.pow(10, Math.floor(Math.log10(step0)));
+    const n = step0 / p;
+    const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+    let min = Math.floor(lo / step) * step;
+    let max = Math.ceil(hi / step) * step;
+    if (min === max) max = min + step;
+    return { min, max, step };
   }
   function renderSlippage(data) {
     const cv = $('slipChart'); if (!cv) return;
@@ -548,10 +650,47 @@
     $('slipAxisX').textContent = 'sample time (HH:MM:SS)';
     $('slipAxisY').textContent = 'adverse slippage (basis points, bps)';
   }
-  async function pollSlippage() {
-    try { const r = await apiFetch('/api/v1/slippage'); if (r.ok) renderSlippage(await r.json()); } catch (e) {}
+  function updatePnlPanel() {
+    const eq = state.equity || {};
+    const slip = state.slippage || {};
+    const mode = state.mode || eq.mode || 'paper';
+    const isLive = mode === 'live';
+
+    const realized = num(eq.realized_pnl);
+    const unrealised = num(eq.unrealized_pnl);
+    let total = num(eq.total_pnl);
+    if (total == null && (realized !== null || unrealised !== null)) total = (realized || 0) + (unrealised || 0);
+    const slipUsd = num(eq.slippage_usd) != null ? num(eq.slippage_usd) : (num(slip.usd_total) != null ? num(slip.usd_total) : null);
+    const net = (total != null && slipUsd != null) ? total - slipUsd : (total != null ? total : null);
+    const trades = num(eq.trades) != null ? eq.trades : (eq.count != null ? eq.count : null);
+
+    setText('pnlScope', isLive ? 'LIVE trading' : 'PAPER — all recordings');
+    setText('pnlTitle', isLive ? 'Total PnL · Real trading' : 'Total PnL · Paper (all recordings)');
+    setText('pnlMode', (isLive ? 'live trading slot' : 'paper recordings') + (trades != null ? ' · ' + count(trades) : ''));
+
+    const te = $('pnlTotal'); te.textContent = money(total);
+    te.className = 'mono text-xl font-semibold mt-1 ' + (total == null ? 'text-dim' : total >= 0 ? 'text-pos' : 'text-neg');
+    setText('pnlSub', (realized != null || unrealised != null)
+      ? 'realized ' + money(realized || 0) + ' + unrealized ' + money(unrealised || 0)
+      : 'realized + unrealized');
+
+    setText('pnlSlippage', money(slipUsd));
+    const ne = $('pnlNet'); ne.textContent = money(net);
+    ne.className = 'mono text-xl font-semibold mt-1 ' + (net == null ? 'text-dim' : net >= 0 ? 'text-pos' : 'text-neg');
+    setText('pnlTrades', count(trades));
+    setText('pnlMeta', total == null ? 'no PnL data yet — awaiting equity poll' :
+      (isLive ? 'real trading PnL · net after slippage ' + money(slipUsd == null ? 0 : slipUsd)
+             : 'paper PnL across all recordings · net after slippage ' + money(slipUsd == null ? 0 : slipUsd)));
   }
-  setInterval(pollSlippage, 5000); pollSlippage();
+  async function pollSlippage() {
+      try {
+        const r = await apiFetch('/api/v1/slippage'); if (!r.ok) return;
+        state.slippage = await r.json();
+        renderSlippage(state.slippage);
+        updatePnlPanel();
+      } catch (e) {}
+    }
+    setInterval(pollSlippage, 5000); pollSlippage();
 
   // ── AI / event feed ───────────────────────────────────────────
   setInterval(async () => {

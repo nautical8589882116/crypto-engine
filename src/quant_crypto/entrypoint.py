@@ -177,20 +177,39 @@ def _telemetry_from_file() -> dict | None:
 
 
 def _equity_snapshot() -> dict:
-    """Rolling PnL series for the equity curve (from engine telemetry)."""
+    """Rolling PnL series for the equity curve (from engine telemetry).
+
+    Samples the TOTAL PnL every call (realized + unrealized) so the curve
+    grows across the whole session even when PnL sits flat, instead of only
+    recording on change. The in-memory window is capped to the most recent
+    ~600 points. Also returns a definitive total-PnL statement (realized +
+    unrealized - slippage) and explicit X/Y axis metadata for the dashboard.
+    """
     import time as _t
 
     from quant_crypto.engine.telemetry import engine_snapshot
 
     snap = _telemetry_from_file() or engine_snapshot() or {}
-    pnl = float(snap.get("total_pnl", 0.0) or 0.0)
-    if not _EQUITY_HISTORY or _EQUITY_HISTORY[-1]["pnl"] != pnl:
-        _EQUITY_HISTORY.append({"t": _t.time(), "pnl": pnl})
+    realized = float(snap.get("total_pnl", 0.0) or 0.0)
+    unrealized = float(snap.get("unrealized_pnl", 0.0) or 0.0)
+    slippage_usd = float(snap.get("slippage_usd_total", 0.0) or 0.0)
+    total = realized + unrealized
+    # Always sample so a flat session still accumulates a growing series.
+    _EQUITY_HISTORY.append({"t": _t.time(), "pnl": round(total, 6)})
+    if len(_EQUITY_HISTORY) > 600:
         del _EQUITY_HISTORY[:-600]
     return {
         "points": _EQUITY_HISTORY,
-        "total_pnl": pnl,
+        "realized_pnl": realized,
+        "unrealized_pnl": unrealized,
+        "total_pnl": total,
+        "slippage_usd": slippage_usd,
+        "net_pnl": round(total - slippage_usd, 6),
         "trades": snap.get("trades", 0),
+        "mode": "live" if get_settings().live_trading else "paper",
+        "axis_x": "session time (HH:MM:SS)",
+        "axis_y": "PnL (USD $)",
+        "axis_unit": "USD",
     }
 
 
