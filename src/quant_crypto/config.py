@@ -14,11 +14,25 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Default per-symbol position sizing in BASE units (what one "lot" of BTC/ETH
 # means here). These are NOT Binance lot sizes — crypto spot trades in fractional
-# units. They are the engine's trade unit (notional ~ $200 each at write time).
+# units. They are the engine's trade unit (notional ~ $50-150 each at write time).
 DEFAULT_QUANTITIES: dict[str, float] = {
-    "BTCUSDT": 0.001,
-    "ETHUSDT": 0.05,
+    "BTC-USD": 0.001,
+    "ETH-USD": 0.05,
+    "SOL-USD": 1.0,
+    "XRP-USD": 100.0,
+    "ADA-USD": 100.0,
+    "DOGE-USD": 500.0,
+    "LINK-USD": 5.0,
+    "LTC-USD": 1.0,
+    "AVAX-USD": 3.0,
+    "BCH-USD": 0.5,
 }
+
+# Per-symbol position cap in BASE units. A symbol not listed here falls back to
+# the global `max_position`. Set to the trade unit so each symbol holds at most
+# one position (no accumulation). This fixes the old bug where a single global
+# cap (0.001) silently blocked every non-BTC symbol (e.g. ETH 0.05) from entering.
+DEFAULT_POSITION_CAPS: dict[str, float] = dict(DEFAULT_QUANTITIES)
 
 
 class Settings(BaseSettings):
@@ -66,12 +80,12 @@ class Settings(BaseSettings):
         default=0.001, gt=0, description="Per-symbol position cap in BASE units"
     )
     crypto_symbols: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["BTCUSDT", "ETHUSDT"],
+        default_factory=lambda: ["BTC-USD", "ETH-USD"],
         description="Spot symbols the engine records/trades (base quote pairs). "
-        "Accepts a JSON list or a comma-separated string (CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT).",
+        "Accepts a JSON list or a comma-separated string (CRYPTO_SYMBOLS=BTC-USD,ETH-USD).",
     )
     market_data_source: str = Field(
-        default="binance",
+        default="coinbase",
         description="Market-data feed: 'binance' (aggTrade+klines) or 'coinbase' "
         "(ticker, real book). Use 'coinbase' where Binance returns HTTP 451 "
         "(geo-blocked cloud regions).",
@@ -79,6 +93,11 @@ class Settings(BaseSettings):
     quantities: dict[str, float] = Field(
         default_factory=lambda: dict(DEFAULT_QUANTITIES),
         description="Trade unit (base units) per symbol for a single entry.",
+    )
+    position_caps: dict[str, float] = Field(
+        default_factory=lambda: dict(DEFAULT_POSITION_CAPS),
+        description="Per-symbol position cap in BASE units; a symbol not listed "
+        "falls back to `max_position`. Accepts a JSON object (POSITION_CAPS).",
     )
 
     # --- Model / signal ---

@@ -163,7 +163,9 @@ class EngineWorkerCore:
             self._bump("daily_loss")
             return "daily_loss"
         held = abs(self.open_pos.get(sym, {}).get("qty", 0.0))
-        if held + abs(qty) > self.settings.max_position:
+        caps = getattr(self.settings, "position_caps", None) or {}
+        cap = caps.get(sym, self.settings.max_position)
+        if held + abs(qty) > cap:
             self._bump("position_cap")
             return "position_cap"
         return None
