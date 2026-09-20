@@ -102,6 +102,9 @@ class EngineWorkerCore:
             "slippage_unit": "basis points (1 bp = 0.01%)",
         }
         self.blocked_counts: dict[str, int] = {}
+        self.last_px: dict[str, float] = {}
+        self.tp_pct, self.sl_pct = 0.0015, 0.0015
+        self.strategy_file = self.rec / "strategy.json"
 
     # --- execution slippage ------------------------------------------
     def _record_slippage(self, sym: str, side: str, fill: float, bid, ask, qty: float) -> None:
@@ -133,9 +136,6 @@ class EngineWorkerCore:
         self.tele["slippage_last_bps"] = round(bps, 4)
         self.tele["slippage_avg_bps"] = round(
             self.tele["slippage_bps_total"] / max(1, self.tele["slippage_count"]), 4)
-        self.last_px: dict[str, float] = {}
-        self.tp_pct, self.sl_pct = 0.0015, 0.0015
-        self.strategy_file = self.rec / "strategy.json"
 
     # --- safety guards -------------------------------------------------
 

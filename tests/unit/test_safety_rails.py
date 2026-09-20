@@ -140,6 +140,19 @@ def test_default_paper_path_still_opens_entry(tmp_path):
     assert core.tele["open_positions"] >= 1
 
 
+def test_worker_init_has_strategy_and_mark_to_market(tmp_path):
+    # Regression: last_px / tp_pct / sl_pct / strategy_file must be set in
+    # __init__ (a misplaced edit once left them inside _record_slippage, so
+    # read_strategy() crashed with AttributeError on the live worker).
+    core = EngineWorkerCore(FakeModel(), make_settings(), tmp_path)
+    assert core.strategy_file == tmp_path / "strategy.json"
+    assert core.tp_pct == 0.0015 and core.sl_pct == 0.0015
+    core.read_strategy()  # must not raise
+    # process() uses last_px for mark-to-market
+    core.process(_tick("BTC-USD", 0, 76500.0))
+    assert "BTC-USD" in core.last_px
+
+
 # ----------------------------------------------------------- coinbase gating/FOK
 class StubClient:
     def __init__(self):
