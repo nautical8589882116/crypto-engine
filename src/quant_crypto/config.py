@@ -16,16 +16,16 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 # means here). These are NOT Binance lot sizes — crypto spot trades in fractional
 # units. They are the engine's trade unit (notional ~ $50-150 each at write time).
 DEFAULT_QUANTITIES: dict[str, float] = {
-    "BTC-USD": 0.001,
-    "ETH-USD": 0.05,
-    "SOL-USD": 1.0,
-    "XRP-USD": 100.0,
-    "ADA-USD": 100.0,
-    "DOGE-USD": 500.0,
-    "LINK-USD": 5.0,
-    "LTC-USD": 1.0,
-    "AVAX-USD": 3.0,
-    "BCH-USD": 0.5,
+    "BTC-USD": 0.00007,
+    "ETH-USD": 0.0022,
+    "SOL-USD": 0.051,
+    "XRP-USD": 4.0,
+    "ADA-USD": 24.5,
+    "DOGE-USD": 61.8,
+    "LINK-USD": 0.46,
+    "LTC-USD": 0.095,
+    "AVAX-USD": 0.54,
+    "BCH-USD": 0.023,
 }
 
 # Per-symbol position cap in BASE units. A symbol not listed here falls back to
@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     )
 
     # --- Model / signal ---
-    prob_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    prob_threshold: float = Field(default=0.40, ge=0.0, le=1.0)
     ring_buffer_size: int = Field(default=300, ge=1)
     model_stride: int = Field(default=25, ge=1)
     hurdle_rate: float = Field(default=1e-6, gt=0.0)

@@ -36,25 +36,24 @@ def make_settings(**over):
 def _tick(sym: str, i: int, ltp: float):
     from quant_crypto.data.binance_feed import Tick
     return Tick.model_validate({
-        "symbol": sym, "ltp": ltp, "timestamp": 1789000000.0 + i,
+        "symbol": sym, "ltp": ltp, "timestamp": 1789000000.0 + i * 60.0,
         "bid": ltp - 0.01, "ask": ltp + 0.01, "bid_qty": 1.0, "ask_qty": 1.0,
         "volume": 0.001, "oi": 100.0,
     })
 
 
 def fill_buffer(core, sym: str, n: int = 320, stride: int | None = None):
-    """Push enough ticks into the buffer to trigger an inference window."""
+    """Push enough ticks into the time-bar buffer to trigger an inference window."""
     stride = stride or core.stride
     for i in range(n):
         tick = _tick(sym, i, 76500.0 + i)
-        # counts already staged across calls won't align to stride; drive directly
         core.counts[sym] = (core.counts.get(sym, 0) + 1)
         if core.buffers.get(sym) is None:
-            from quant_crypto.data.ring_buffer import RingBuffer
-            core.buffers[sym] = RingBuffer(capacity=core.seq)
-        core.buffers[sym].append(tick)
-        if core.buffers[sym].is_full and core.counts[sym] % stride == 0:
-            prob = float(core.model.predict(core.buffers[sym].snapshot()))
+            from quant_crypto.data.tbar import TimeBarWindow
+            core.buffers[sym] = TimeBarWindow(nbar=core.seq)
+        core.buffers[sym].push(tick)
+        if core.buffers[sym].ready and core.counts[sym] % stride == 0:
+            prob = float(core.model.predict(core.buffers[sym].window()))
             if prob >= core.settings.prob_threshold and sym not in core.open_pos:
                 qty = core.settings.quantities.get(sym, core.settings.max_position)
                 if not core.entry_blocked(sym, qty):
@@ -146,7 +145,7 @@ def test_worker_init_has_strategy_and_mark_to_market(tmp_path):
     # read_strategy() crashed with AttributeError on the live worker).
     core = EngineWorkerCore(FakeModel(), make_settings(), tmp_path)
     assert core.strategy_file == tmp_path / "strategy.json"
-    assert core.tp_pct == 0.0015 and core.sl_pct == 0.0015
+    assert core.tp_pct == 0.006 and core.sl_pct == 0.0035
     core.read_strategy()  # must not raise
     # process() uses last_px for mark-to-market
     core.process(_tick("BTC-USD", 0, 76500.0))

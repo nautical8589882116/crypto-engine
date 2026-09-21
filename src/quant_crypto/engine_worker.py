@@ -30,8 +30,7 @@ from pathlib import Path
 
 from quant_crypto.config import get_settings
 from quant_crypto.data.binance_feed import Tick
-from quant_crypto.data.ring_buffer import RingBuffer
-from quant_crypto.data.window import window_from_snapshot
+from quant_crypto.data.tbar import TimeBarWindow
 
 # Cross-process kill-switch flag file name (shared with entrypoint.py).
 KILL_FLAG_NAME = "killswitch.flag"
@@ -84,7 +83,7 @@ class EngineWorkerCore:
 
         self.seq = model.seq_len
         self.stride = settings.model_stride
-        self.buffers: dict[str, RingBuffer] = {}
+        self.buffers: dict[str, TimeBarWindow] = {}
         self.counts: dict[str, int] = {}
         self.open_pos: dict[str, dict] = {}
 
@@ -109,7 +108,7 @@ class EngineWorkerCore:
             self.tele["open_positions"] = self._live_open_count()
         self.blocked_counts: dict[str, int] = {}
         self.last_px: dict[str, float] = {}
-        self.tp_pct, self.sl_pct = 0.0015, 0.0015
+        self.tp_pct, self.sl_pct = 0.006, 0.0035
         self.strategy_file = self.rec / "strategy.json"
 
     def _live_open_count(self) -> int:
@@ -219,10 +218,11 @@ class EngineWorkerCore:
     def process(self, tick: Tick) -> None:
         sym = tick.symbol
         if sym not in self.buffers:
-            self.buffers[sym] = RingBuffer(capacity=self.seq)
+            self.buffers[sym] = TimeBarWindow(nbar=self.seq)
             self.counts[sym] = 0
         buf = self.buffers[sym]
-        buf.append(tick)
+        before = len(buf._bars)
+        buf.push(tick)
         self.counts[sym] += 1
         self.tele["ticks_processed"] += 1
 
@@ -242,9 +242,14 @@ class EngineWorkerCore:
                     self._record_slippage(sym, "exit", ltp, tick.bid, tick.ask, pos["qty"])
                     self.open_pos.pop(sym, None)
 
-        if buf.is_full and self.counts[sym] % self.stride == 0:
+        # Run inference once per NEW finalized bar (a bar closes when a new
+        # minute starts). The time-bar window is the model's input.
+        if len(buf._bars) > before and buf.ready:
             try:
-                prob = float(self.model.predict(window_from_snapshot(buf.snapshot())))
+                win = buf.window()
+                if win is None:
+                    return
+                prob = float(self.model.predict(win))
             except Exception:  # noqa: BLE001
                 return
             self.tele["inferences"] += 1
@@ -354,7 +359,7 @@ def main() -> None:
     from quant_crypto.model.infer import MambaInference
 
     model = MambaInference(
-        model_path, seq_len=300, n_features=3, threshold=settings.prob_threshold
+        model_path, seq_len=60, n_features=7, threshold=settings.prob_threshold
     )
     log.info("engine worker start: model=%s tape=%s", model_path, tape)
 

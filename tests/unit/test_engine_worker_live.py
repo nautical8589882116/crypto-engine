@@ -15,7 +15,7 @@ from quant_crypto.engine_worker import EngineWorkerCore
 
 
 class FakeModel:
-    seq_len = 300
+    seq_len = 60
 
     def predict(self, window):
         return 0.9  # always above threshold -> seeks entries
@@ -65,15 +65,16 @@ def make_settings(**over):
 
 def _tick(sym, i, ltp):
     from quant_crypto.data.binance_feed import Tick
+    # one tick per minute so the 60-bar time window fills within the loop
     return Tick.model_validate({
-        "symbol": sym, "ltp": ltp, "timestamp": 1789000000.0 + i,
+        "symbol": sym, "ltp": ltp, "timestamp": 1789000000.0 + i * 60.0,
         "bid": ltp - 0.01, "ask": ltp + 0.01, "bid_qty": 1.0, "ask_qty": 1.0,
         "volume": 0.001, "oi": 100.0,
     })
 
 
-def _process_to_entry(core, sym, n=320):
-    """Drive process() until an inference window fires (counts % stride == 0)."""
+def _process_to_entry(core, sym, n=200):
+    """Drive process() until the 60-bar time window fills and an entry fires."""
     for i in range(n):
         core.process(_tick(sym, i, 76500.0 + i))
         if core.tele["entries"] > 0:
