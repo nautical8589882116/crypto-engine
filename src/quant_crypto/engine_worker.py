@@ -55,6 +55,10 @@ def _find_model() -> str | None:
     rec = Path(os.environ.get("RECORD_DIR", "/data/tapes"))
     for d in (rec.parent / "models", Path("/data/models"), Path("models")):
         if d.is_dir():
+            # Prefer the time-bar model (60x7); fall back to any *.onnx.
+            tbar = d / "mamba_tbar.onnx"
+            if tbar.is_file():
+                return str(tbar)
             for f in sorted(d.glob("*.onnx")):
                 return str(f)
     return None
