@@ -1,9 +1,9 @@
 {
-  "released_from": "20260917-194614.onnx",
-  "parity_err": 0.0,
-  "windows_trained": 1500,
-  "positive": 682,
-  "val_loss": 0.6677,
+  "released_from": "20260921-033307.onnx",
+  "parity_err": 2.98e-08,
+  "windows_trained": 4000,
+  "positive": 1907,
+  "val_loss": 0.6589,
   "random_baseline": 0.693,
   "config": {
     "n_features": 3,
@@ -11,6 +11,6 @@
     "n_layers": 1
   },
   "corpus": "/opt/data/corpus_backfill/train_subset.npz",
-  "source": "binance-backfill (2,129,835 trades -> 85,169 windows)",
-  "note": "marginal signal (~0.025 below random); infrastructure demo, not a tradeable edge"
+  "source": "binance-backfill 10 pairs (BTC ETH SOL XRP ADA DOGE LINK LTC AVAX BCH) -> 132,543 windows",
+  "note": "10-pair coverage; val_loss 0.6589 vs prior 0.6677. Still marginal signal; infrastructure demo, not a tradeable edge"
 }
