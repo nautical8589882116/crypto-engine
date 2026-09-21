@@ -29,7 +29,7 @@ RUN mkdir -p /data
 
 ENV PYTHONUNBUFFERED=1 \
     RECORD_DIR=/data/tapes \
-    ENGINE_MODEL=/app/models/mamba.onnx
+    ENGINE_MODEL=/app/models/mamba_tbar.onnx
 
 EXPOSE 8000
 CMD ["python", "-m", "quant_crypto.entrypoint"]
