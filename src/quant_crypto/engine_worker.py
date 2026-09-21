@@ -75,11 +75,12 @@ class EngineWorkerCore:
     a fake model and injected settings.
     """
 
-    def __init__(self, model, settings, rec: Path):
+    def __init__(self, model, settings, rec: Path, broker=None):
         self.model = model
         self.settings = settings
         self.rec = Path(rec).absolute()
         self.killflag = _kill_flag(self.rec)
+        self.broker = broker  # None = paper sim; a live broker routes real fills
 
         self.seq = model.seq_len
         self.stride = settings.model_stride
@@ -101,10 +102,29 @@ class EngineWorkerCore:
             "slippage_usd_total": 0.0, "slippage_count": 0,
             "slippage_unit": "basis points (1 bp = 0.01%)",
         }
+        if broker is not None:
+            self.tele["mode"] = "live"
+            self.tele["session_source"] = "coinbase-live"
+            # open positions are reconciled from the broker on each poll
+            self.tele["open_positions"] = self._live_open_count()
         self.blocked_counts: dict[str, int] = {}
         self.last_px: dict[str, float] = {}
         self.tp_pct, self.sl_pct = 0.0015, 0.0015
         self.strategy_file = self.rec / "strategy.json"
+
+    def _live_open_count(self) -> int:
+        """How many symbols the live broker currently holds a position in."""
+        if self.broker is None:
+            return 0
+        count = 0
+        for sym in getattr(self.settings, "quantities", {}):
+            try:
+                if abs(float(self.broker.get_position(sym))) > 1e-12:
+                    count += 1
+            except Exception:  # noqa: BLE001 - a failed reconcile is not fatal
+                pass
+        return count
+
 
     # --- execution slippage ------------------------------------------
     def _record_slippage(self, sym: str, side: str, fill: float, bid, ask, qty: float) -> None:
@@ -212,12 +232,15 @@ class EngineWorkerCore:
             ltp = tick.ltp
             reason = "take_profit" if ltp >= pos["tp"] else ("stop_loss" if ltp <= pos["sl"] else None)
             if reason:
-                pnl = (ltp - pos["entry"]) * pos["qty"]
-                self.tele["total_pnl"] += pnl
-                self.tele["trades"] += 1
-                self.tele["wins" if pnl > 0 else "losses"] += 1
-                self._record_slippage(sym, "exit", ltp, tick.bid, tick.ask, pos["qty"])
-                self.open_pos.pop(sym, None)
+                if self.broker is not None:
+                    self._live_close(sym, pos, reason)
+                else:
+                    pnl = (ltp - pos["entry"]) * pos["qty"]
+                    self.tele["total_pnl"] += pnl
+                    self.tele["trades"] += 1
+                    self.tele["wins" if pnl > 0 else "losses"] += 1
+                    self._record_slippage(sym, "exit", ltp, tick.bid, tick.ask, pos["qty"])
+                    self.open_pos.pop(sym, None)
 
         if buf.is_full and self.counts[sym] % self.stride == 0:
             try:
@@ -231,18 +254,62 @@ class EngineWorkerCore:
                 # Safety gate: kill switch -> daily loss -> position cap.
                 if not self.entry_blocked(sym, qty):
                     entry = tick.ask or tick.ltp
-                    self.open_pos[sym] = {
-                        "entry": entry, "qty": qty,
-                        "tp": entry * (1 + self.tp_pct), "sl": entry * (1 - self.sl_pct), "prob": prob,
-                    }
-                    self._record_slippage(sym, "entry", entry, tick.bid, tick.ask, qty)
-                    self.tele["entries"] += 1
-            self.tele["open_positions"] = len(self.open_pos)
+                    if self.broker is not None:
+                        self._live_enter(sym, qty, entry, tick, prob)
+                    else:
+                        self.open_pos[sym] = {
+                            "entry": entry, "qty": qty,
+                            "tp": entry * (1 + self.tp_pct), "sl": entry * (1 - self.sl_pct), "prob": prob,
+                        }
+                        self._record_slippage(sym, "entry", entry, tick.bid, tick.ask, qty)
+                        self.tele["entries"] += 1
+            self.tele["open_positions"] = self._live_open_count() if self.broker is not None else len(self.open_pos)
         # mark-to-market the open book (what the position is worth right now)
         self.last_px[sym] = tick.ltp
         self.tele["unrealized_pnl"] = round(
             sum((self.last_px.get(s, p["entry"]) - p["entry"]) * p["qty"] for s, p in self.open_pos.items()), 6
         )
+
+    # --- live broker execution (only when a real broker is attached) ----
+
+    def _live_enter(self, sym: str, qty: float, ask, tick, prob: float) -> None:
+        """Open a real position: BUY FOK lifting the ask. Records fills + slippage."""
+        from quant_crypto.broker.base import Order, OrderSide, OrderType
+
+        fill = self.broker.place_order(
+            Order(symbol=sym, side=OrderSide.BUY, qty=qty,
+                  order_type=OrderType.FOK, limit_price=ask)
+        )
+        if fill is None:
+            return  # FOK unfilled (illiquid / rejected) — skip, no phantom position
+        entry = fill.fill_price
+        self.open_pos[sym] = {
+            "entry": entry, "qty": fill.qty,
+            "tp": entry * (1 + self.tp_pct), "sl": entry * (1 - self.sl_pct),
+            "prob": prob, "order_id": fill.order_id,
+        }
+        self._record_slippage(sym, "entry", entry, tick.bid, tick.ask, fill.qty)
+        self.tele["entries"] += 1
+
+    def _live_close(self, sym: str, pos: dict, reason: str) -> None:
+        """Close a real position: SELL IOC hitting the bid. Records realized PnL."""
+        from quant_crypto.broker.base import Order, OrderSide, OrderType
+
+        bid = self.last_px.get(sym, pos["entry"])
+        fill = self.broker.place_order(
+            Order(symbol=sym, side=OrderSide.SELL, qty=pos["qty"],
+                  order_type=OrderType.IOC, limit_price=bid)
+        )
+        if fill is None:
+            return  # IOC unfilled — keep the position open, retry next tick
+        pnl = (fill.fill_price - pos["entry"]) * fill.qty
+        self.tele["total_pnl"] += pnl
+        self.tele["trades"] += 1
+        self.tele["wins" if pnl > 0 else "losses"] += 1
+        q, a = bid - 0.01, bid + 0.01  # approximate book for slippage accounting
+        self._record_slippage(sym, "exit", fill.fill_price, q, a, fill.qty)
+        self.open_pos.pop(sym, None)
+
 
 
 def main() -> None:
@@ -250,23 +317,32 @@ def main() -> None:
     settings = get_settings()
 
     # ------------------------------------------------------------------
-    # LIVE SEAM (GATED — DO NOT ENABLE).
+    # LIVE BROKER SEAM (GATED).
     #
-    # The deployed pipeline is 100% paper. The broker factory
-    # (entrypoint.build_broker) already selects a real coinbase broker when
-    # live_trading + coinbase_execution + market_data_source=coinbase are all
-    # set. Wire the Broker contract (get_depth/place_order/get_position from
-    # src/quant_crypto/broker/base.py) into EngineWorkerCore here to route
-    # entries/exits through a real broker. Until that is wired, flipping
-    # live_trading hard-fails at startup rather than silently paper-trading
-    # real-sized signals.
+    # The deployed pipeline is 100% paper. When the operator turns on
+    # LIVE_TRADING=1 together with coinbase_execution + market_data_source
+    # + Coinbase CDP credentials, build_broker() returns a real CoinbaseBroker
+    # and it is wired into the worker so entries/exits route real fills. Any
+    # other live_trading combination that can't produce a real broker refuses
+    # to run rather than silently paper-trading real-sized signals.
     # ------------------------------------------------------------------
+    broker = None
     if settings.live_trading:
-        raise RuntimeError(
-            "engine_worker live seam not yet wired via the Broker contract "
-            "(src/quant_crypto/broker/base.py) — refusing to trade. "
-            "Wire build_broker() into the entry path before setting LIVE_TRADING=1."
-        )
+        from quant_crypto.entrypoint import build_broker
+        from quant_crypto.broker.base import PaperBroker
+
+        built = build_broker(settings)
+        if isinstance(built, PaperBroker):
+            raise RuntimeError(
+                "LIVE_TRADING=1 but build_broker() produced a PaperBroker — "
+                "live execution requires coinbase_execution=1, "
+                "market_data_source=coinbase and COINBASE_API_NAME + "
+                "COINBASE_API_PRIVATE_KEY. Refusing to paper-trade a live flag."
+            )
+        broker = built
+        log.info("engine worker executing LIVE via %s", type(broker).__name__)
+    else:
+        log.info("engine worker executing PAPER (no live broker)")
 
     rec = Path(os.environ.get("RECORD_DIR", "/data/tapes"))
     rec.mkdir(parents=True, exist_ok=True)
@@ -282,7 +358,9 @@ def main() -> None:
     )
     log.info("engine worker start: model=%s tape=%s", model_path, tape)
 
-    core = EngineWorkerCore(model, settings, rec)
+    core = EngineWorkerCore(model, settings, rec, broker=broker)
+    if broker is not None:
+        log.info("live broker wired; mode=live — real orders will be routed")
 
     async def loop() -> None:
         # tail the tape: start at current end, read new lines as they are appended
